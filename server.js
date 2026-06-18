@@ -1,16 +1,17 @@
 // server.js
 const express = require('express');
 const path = require('path');
-const { discover } = require('./lib/discover');
-const { auditPage } = require('./lib/audit');
-const { logScan, getScans } = require('./lib/sheets');
+const { discover } = require('./discover');
+const { auditPage } = require('./audit');
+const { logScan, getScans } = require('./sheets');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || 'sandstorm2026';
 const MAX_PAGES_CAP = 25;
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Serve the single-page UI from the repo root.
+app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 // Keep-alive endpoint for cron-job.org (free-tier cold starts).
 app.get('/healthz', (_req, res) => res.json({ ok: true, ts: Date.now() }));
