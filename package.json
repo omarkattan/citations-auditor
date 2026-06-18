@@ -1,0 +1,19 @@
+{
+  "name": "claims-auditor",
+  "version": "1.0.0",
+  "description": "Crawl a site and flag unsubstantiated claims against Google E-E-A-T, with citation recommendations. A Sandstorm Digital production.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "cheerio": "^1.0.0",
+    "express": "^4.19.2",
+    "googleapis": "^144.0.0"
+  }
+}

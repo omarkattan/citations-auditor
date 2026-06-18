@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claims - E-E-A-T Claim Auditor by Sandstorm Digital</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d0c;
+    --panel: #111513;
+    --panel-2: #161b18;
+    --line: #1f2723;
+    --text: #e7ece9;
+    --muted: #8a948e;
+    --green: #2ecc71;
+    --green-dim: #1d7a45;
+    --high: #ff6b6b;
+    --med: #f5a623;
+    --low: #6f7a74;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --sans: 'Instrument Sans', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 40px 20px 80px; }
+
+  header { border-bottom: 1px solid var(--line); padding-bottom: 22px; margin-bottom: 28px; }
+  .badge {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--green); margin-bottom: 12px;
+  }
+  h1 {
+    font-family: var(--mono); font-weight: 700; font-size: 30px;
+    margin: 0 0 8px; letter-spacing: -0.01em;
+  }
+  h1 .cursor { color: var(--green); animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .sub { color: var(--muted); max-width: 60ch; font-size: 15px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px; margin-bottom: 22px;
+  }
+  label.field { display: block; font-family: var(--mono); font-size: 11px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+
+  input[type=text], select {
+    width: 100%; background: var(--bg); border: 1px solid var(--line);
+    color: var(--text); font-family: var(--mono); font-size: 14px;
+    padding: 12px 14px; border-radius: 8px; outline: none;
+  }
+  input[type=text]:focus, select:focus { border-color: var(--green-dim); }
+
+  .sources { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .src-btn {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    background: var(--panel-2); border: 1px solid var(--line);
+    padding: 8px 12px; border-radius: 999px; cursor: pointer; transition: .15s;
+  }
+  .src-btn[aria-pressed="true"] { color: var(--bg); background: var(--green); border-color: var(--green); font-weight: 600; }
+  .src-note { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 16px; }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: end; margin-top: 16px; }
+  .row > div { flex: 1; min-width: 140px; }
+  #pathWrap { display: none; }
+
+  button.run {
+    font-family: var(--mono); font-weight: 700; font-size: 14px;
+    background: var(--green); color: #06150c; border: none;
+    padding: 13px 22px; border-radius: 8px; cursor: pointer; letter-spacing: .02em;
+  }
+  button.run:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* terminal */
+  .term {
+    font-family: var(--mono); font-size: 13px; background: #080a09;
+    border: 1px solid var(--line); border-radius: 10px; padding: 16px;
+    min-height: 60px; max-height: 220px; overflow-y: auto; margin-bottom: 22px; display: none;
+  }
+  .term .ln { white-space: pre-wrap; }
+  .term .ok { color: var(--green); }
+  .term .dim { color: var(--muted); }
+  .term .err { color: var(--high); }
+
+  /* summary */
+  .summary { display: none; gap: 10px; flex-wrap: wrap; margin-bottom: 22px; }
+  .stat { flex: 1; min-width: 130px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; }
+  .stat .n { font-family: var(--mono); font-size: 26px; font-weight: 700; }
+  .stat .l { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .stat.high .n { color: var(--high); }
+
+  /* page groups */
+  .page-group { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+  .page-head { background: var(--panel-2); padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .page-head .u { font-family: var(--mono); font-size: 13px; color: var(--green); word-break: break-all; }
+  .page-head .t { font-size: 13px; color: var(--muted); }
+  .page-head .clean { color: var(--green); font-family: var(--mono); font-size: 12px; }
+
+  .claim { padding: 16px; border-bottom: 1px solid var(--line); }
+  .claim:last-child { border-bottom: none; }
+  .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+  .tag { font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+  .tag.sev-high { color: var(--high); border-color: var(--high); }
+  .tag.sev-medium { color: var(--med); border-color: var(--med); }
+  .tag.sev-low { color: var(--low); border-color: var(--low); }
+  .tag.pillar { color: var(--green); border-color: var(--green-dim); }
+
+  .claim .quote { font-size: 15px; font-weight: 500; margin: 0 0 8px; }
+  .claim .quote::before { content: '"'; color: var(--muted); }
+  .claim .quote::after { content: '"'; color: var(--muted); }
+  .claim .meta { font-size: 13px; color: var(--muted); margin: 4px 0; }
+  .claim .meta b { color: var(--text); font-weight: 600; }
+  .claim .fix { font-size: 13px; margin: 8px 0 0; }
+  .claim .fix b { color: var(--green); }
+  .src-link { display: inline-block; margin-top: 8px; font-family: var(--mono); font-size: 12px;
+    color: var(--green); text-decoration: none; border-bottom: 1px dashed var(--green-dim); word-break: break-all; }
+  .src-none { margin-top: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: center; }
+  footer a { color: var(--green); text-decoration: none; }
+
+  @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="badge">Sandstorm Digital // E-E-A-T</div>
+    <h1>Claim Auditor<span class="cursor">_</span></h1>
+    <p class="sub">Point it at a site. It crawls the pages, flags claims that assert something without backing it up, maps each to the E-E-A-T pillar it weakens, and hands you the fix plus a real citation to use.</p>
+  </header>
+
+  <div class="panel">
+    <label class="field" for="url">Site URL</label>
+    <input type="text" id="url" placeholder="https://example.com" autocomplete="off" spellcheck="false">
+
+    <div style="margin-top:16px">
+      <label class="field">Source</label>
+      <div class="sources" id="sources">
+        <button class="src-btn" data-src="crawl" aria-pressed="true">Crawl from homepage</button>
+        <button class="src-btn" data-src="folder" aria-pressed="false">Specific folder</button>
+        <button class="src-btn" data-src="sitemap" aria-pressed="false">XML sitemap</button>
+        <button class="src-btn" data-src="gsc" aria-pressed="false">Search Console</button>
+        <button class="src-btn" data-src="ahrefs" aria-pressed="false">Ahrefs</button>
+      </div>
+      <div class="src-note" id="srcNote">Follows internal links starting at the homepage.</div>
+    </div>
+
+    <div class="row">
+      <div id="pathWrap">
+        <label class="field" for="path">Folder path</label>
+        <input type="text" id="path" placeholder="/blog" autocomplete="off" spellcheck="false">
+      </div>
+      <div>
+        <label class="field" for="maxPages">Max pages</label>
+        <select id="maxPages">
+          <option>5</option>
+          <option selected>10</option>
+          <option>15</option>
+          <option>25</option>
+        </select>
+      </div>
+      <div style="flex:0 0 auto">
+        <button class="run" id="run">Run audit</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="term" id="term"></div>
+  <div class="summary" id="summary"></div>
+  <div id="results"></div>
+
+  <footer>
+    Claims &mdash; Another <a href="https://sandstormdigital.com" target="_blank" rel="noopener">Sandstorm Digital</a> Production
+  </footer>
+</div>
+
+<script>
+  const SOURCE_NOTES = {
+    crawl: 'Follows internal links starting at the homepage.',
+    folder: 'Crawls but only audits pages under the path you set.',
+    sitemap: 'Reads /sitemap.xml (and sitemap index files).',
+    gsc: 'Pulls top pages from Google Search Console. Needs the service account added to the property.',
+    ahrefs: 'Pulls top pages by traffic from Ahrefs. Needs AHREFS_API_KEY set.'
+  };
+
+  let source = 'crawl';
+  const sourcesEl = document.getElementById('sources');
+  const srcNote = document.getElementById('srcNote');
+  const pathWrap = document.getElementById('pathWrap');
+
+  sourcesEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.src-btn');
+    if (!btn) return;
+    source = btn.dataset.src;
+    [...sourcesEl.children].forEach((b) => b.setAttribute('aria-pressed', b === btn));
+    srcNote.textContent = SOURCE_NOTES[source];
+    pathWrap.style.display = source === 'folder' ? 'block' : 'none';
+  });
+
+  const term = document.getElementById('term');
+  const summary = document.getElementById('summary');
+  const results = document.getElementById('results');
+  const runBtn = document.getElementById('run');
+
+  function log(text, cls = '') {
+    const ln = document.createElement('div');
+    ln.className = 'ln ' + cls;
+    ln.textContent = text;
+    term.appendChild(ln);
+    term.scrollTop = term.scrollHeight;
+  }
+
+  function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+  function sevClass(s) {
+    const v = (s || '').toLowerCase();
+    return v === 'high' ? 'sev-high' : v === 'medium' ? 'sev-medium' : 'sev-low';
+  }
+
+  function renderPage(page) {
+    const group = document.createElement('div');
+    group.className = 'page-group';
+    const claims = page.claims || [];
+
+    let head = `<div class="page-head">
+      <div class="u">${esc(page.url)}</div>
+      ${page.title ? `<div class="t">${esc(page.title)}</div>` : ''}`;
+    if (page.error) head += `<div class="t err" style="color:var(--high)">${esc(page.error)}</div>`;
+    else if (!claims.length) head += `<div class="clean">No unsubstantiated claims found.</div>`;
+    head += `</div>`;
+
+    const body = claims.map((c) => {
+      const src = c.suggested_source && c.suggested_source.url
+        ? `<a class="src-link" href="${esc(c.suggested_source.url)}" target="_blank" rel="noopener">Citation: ${esc(c.suggested_source.title || c.suggested_source.url)}</a>`
+        : `<div class="src-none">No credible source found yet. Substantiate with: ${esc(c.recommendation)}</div>`;
+      return `<div class="claim">
+        <div class="tags">
+          <span class="tag ${sevClass(c.severity)}">${esc(c.severity || 'low')}</span>
+          <span class="tag">${esc(c.claim_type || 'claim')}</span>
+          <span class="tag pillar">${esc(c.eeat || 'Trustworthiness')}</span>
+        </div>
+        <p class="quote">${esc(c.claim)}</p>
+        ${c.context ? `<div class="meta">${esc(c.context)}</div>` : ''}
+        <div class="meta"><b>Issue:</b> ${esc(c.issue)}</div>
+        <div class="fix"><b>Fix:</b> ${esc(c.recommendation)}</div>
+        ${src}
+      </div>`;
+    }).join('');
+
+    group.innerHTML = head + body;
+    results.appendChild(group);
+  }
+
+  function renderSummary(d) {
+    summary.style.display = 'flex';
+    summary.innerHTML = `
+      <div class="stat"><div class="n">${d.pagesScanned}</div><div class="l">Pages</div></div>
+      <div class="stat"><div class="n">${d.totalClaims}</div><div class="l">Claims flagged</div></div>
+      <div class="stat high"><div class="n">${d.highSeverity}</div><div class="l">High severity</div></div>
+      <div class="stat"><div class="n">${d.durationSec}s</div><div class="l">Scan time</div></div>`;
+  }
+
+  function run() {
+    const url = document.getElementById('url').value.trim();
+    if (!url) { document.getElementById('url').focus(); return; }
+    const maxPages = document.getElementById('maxPages').value;
+    const pathPrefix = document.getElementById('path').value.trim();
+
+    term.style.display = 'block';
+    term.innerHTML = '';
+    summary.style.display = 'none';
+    summary.innerHTML = '';
+    results.innerHTML = '';
+    runBtn.disabled = true;
+    runBtn.textContent = 'Auditing...';
+
+    const params = new URLSearchParams({ url, source, maxPages, findSources: 'true' });
+    if (source === 'folder' && pathPrefix) params.set('path', pathPrefix);
+
+    const es = new EventSource('/api/scan/stream?' + params.toString());
+
+    es.addEventListener('status', (e) => log('> ' + JSON.parse(e.data).message, 'dim'));
+    es.addEventListener('pages', (e) => {
+      const d = JSON.parse(e.data);
+      log('> found ' + d.count + ' page' + (d.count === 1 ? '' : 's'), 'ok');
+    });
+    es.addEventListener('page', (e) => {
+      const page = JSON.parse(e.data);
+      const n = (page.claims || []).length;
+      log('  ' + (page.error ? '! ' : (n ? '? ' : 'ok ')) + page.url + (page.error ? ' (' + page.error + ')' : ' (' + n + ' claim' + (n === 1 ? '' : 's') + ')'), page.error ? 'err' : (n ? '' : 'ok'));
+      renderPage(page);
+    });
+    es.addEventListener('done', (e) => {
+      const d = JSON.parse(e.data);
+      log('> done in ' + d.durationSec + 's', 'ok');
+      renderSummary(d);
+      es.close();
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run audit';
+    });
+    es.addEventListener('error', (e) => {
+      let msg = 'Connection lost.';
+      try { if (e.data) msg = JSON.parse(e.data).message; } catch {}
+      log('> error: ' + msg, 'err');
+      es.close();
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run audit';
+    });
+  }
+
+  runBtn.addEventListener('click', run);
+  document.getElementById('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+</script>
+</body>
+</html>
