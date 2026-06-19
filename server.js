@@ -34,6 +34,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 // Serve the single-page UI from the repo root.
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/success', (_req, res) => res.sendFile(path.join(__dirname, 'success.html')));
+app.get('/bot', (_req, res) => res.sendFile(path.join(__dirname, 'bot.html')));
 
 app.use(express.json({ limit: '2mb' }));
 

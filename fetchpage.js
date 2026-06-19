@@ -25,6 +25,36 @@ const BROWSER_HEADERS = {
 
 const BLOCK_STATUSES = [401, 403, 429, 503];
 
+// Identity used only when fetching an allowlisted client domain, so the client
+// can recognize and skip-challenge our crawler.
+const BRANDED_UA = 'SandstormClaimsAuditor/1.0 (+https://claims-auditor.sandstormdigital.com/bot)';
+const AUTH_HEADER = process.env.CRAWLER_AUTH_HEADER || 'X-Sandstorm-Auth';
+
+// CRAWLER_AUTH is a JSON map of client domain -> secret token. The secret is
+// only ever sent to that domain (matched by host or subdomain), never to other
+// sites, so it cannot leak to third parties we crawl.
+function clientAuthFor(url) {
+  const raw = process.env.CRAWLER_AUTH;
+  if (!raw) return null;
+  let map;
+  try { map = JSON.parse(raw); } catch { return null; }
+  let host;
+  try { host = new URL(url).hostname.replace(/^www\./, '').toLowerCase(); } catch { return null; }
+  for (const key of Object.keys(map)) {
+    const k = key.replace(/^www\./, '').toLowerCase();
+    if (host === k || host.endsWith('.' + k)) return { header: AUTH_HEADER, secret: map[key] };
+  }
+  return null;
+}
+
+// Headers for a direct fetch. Client domains get the branded UA plus the secret
+// auth header; everything else gets the browser-like headers.
+function directHeaders(url) {
+  const auth = clientAuthFor(url);
+  if (!auth) return BROWSER_HEADERS;
+  return { ...BROWSER_HEADERS, 'User-Agent': BRANDED_UA, [auth.header]: auth.secret };
+}
+
 // Markers of a page that was served but not really rendered: bot-detection
 // interstitials and "enable JavaScript" shells.
 const CHALLENGE_RE = /just a moment|checking your browser|enable javascript|please verify you are human|verifying you are human|cf-chl|cf_chl|challenge-platform|challenges\.cloudflare|datadome|captcha-delivery|px-captcha|access denied|attention required/i;
@@ -48,7 +78,7 @@ async function fetchDirect(url, timeoutMs = 15000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers: BROWSER_HEADERS, signal: controller.signal, redirect: 'follow' });
+    const res = await fetch(url, { headers: directHeaders(url), signal: controller.signal, redirect: 'follow' });
     const status = res.status;
     if (!res.ok) {
       return { ok: false, status, html: null, via: 'direct', blocked: BLOCK_STATUSES.includes(status), error: `HTTP ${status}` };
@@ -182,6 +212,7 @@ async function fetchDiagnostic(url) {
     url,
     browserlessConfigured: browserlessConfigured(),
     browserlessAlways: browserlessAlways(),
+    clientAuthApplied: Boolean(clientAuthFor(url)),
     config: browserlessConfig(),
     direct: {
       ok: direct.ok,

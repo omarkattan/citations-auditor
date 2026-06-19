@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>SandstormClaimsAuditor - Crawler Information</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --green: #2ecc71; --bg: #0c0f0d; --panel: #12161300; --card: #141a16; --text: #e6efe9; --muted: #8aa395; --line: #1f2a23; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: 'Instrument Sans', system-ui, sans-serif; line-height: 1.6;
+    padding: 48px 20px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .tag { font-family: 'JetBrains Mono', monospace; color: var(--green); font-size: 13px; letter-spacing: 0.5px; text-transform: uppercase; }
+  h1 { font-size: 30px; margin: 8px 0 4px; font-weight: 600; }
+  h2 { font-size: 18px; margin: 32px 0 8px; font-weight: 600; }
+  p { color: var(--text); }
+  .muted { color: var(--muted); }
+  code, .mono { font-family: 'JetBrains Mono', monospace; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin: 12px 0;
+  }
+  .ua { color: var(--green); font-size: 14px; word-break: break-all; }
+  ul { padding-left: 18px; }
+  li { margin: 6px 0; }
+  a { color: var(--green); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; font-family: 'JetBrains Mono', monospace; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="tag">Crawler Information</div>
+    <h1>SandstormClaimsAuditor</h1>
+    <p class="muted">An automated reader operated by Sandstorm Digital as part of the Claims Auditor tool.</p>
+
+    <div class="card">
+      <div class="muted mono" style="font-size:12px;margin-bottom:6px;">User-Agent</div>
+      <div class="ua mono">SandstormClaimsAuditor/1.0 (+https://claims-auditor.sandstormdigital.com/bot)</div>
+    </div>
+
+    <h2>What it does</h2>
+    <p>This crawler reads the publicly accessible pages of websites we audit and checks the content for unsubstantiated claims, mapping each finding to Google's E-E-A-T quality framework so site owners can strengthen credibility, search performance, and visibility in AI assistants.</p>
+
+    <h2>How it behaves</h2>
+    <ul>
+      <li><strong>Read-only.</strong> It only reads page content. It never submits forms, logs in, makes purchases, or changes anything on your site.</li>
+      <li><strong>Public pages only.</strong> It reads the same pages any ordinary visitor can see.</li>
+      <li><strong>Low volume.</strong> It runs on request when a site owner or their agency initiates an audit, not on a continuous schedule.</li>
+      <li><strong>Identifiable.</strong> Every request carries the user-agent shown above so it is easy to recognize in your logs.</li>
+    </ul>
+
+    <h2>Allowlisting our crawler</h2>
+    <p>If you operate a site we are auditing and your bot protection is blocking us, we can supply a private token so you can allowlist only our crawler. When authorized, our requests carry a private header named <code>X-Sandstorm-Auth</code> holding a secret token shared with you directly. You can add a single rule that lets through only requests carrying that token, without opening your site to anyone else.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about this crawler, or want it to stop accessing your site? Get in touch via <a href="https://sandstormdigital.com">sandstormdigital.com</a> and we will respond promptly.</p>
+
+    <div class="footer">Another Sandstorm Digital Production &middot; <a href="https://sandstormdigital.com">sandstormdigital.com</a></div>
+  </div>
+</body>
+</html>
