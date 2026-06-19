@@ -71,7 +71,8 @@ function browserlessConfig() {
     mode: (process.env.BROWSERLESS_MODE || 'unblock').toLowerCase(),
     proxy: process.env.BROWSERLESS_PROXY || null,
     proxyCountry: process.env.BROWSERLESS_PROXY_COUNTRY || null,
-    timeoutMs: parseInt(process.env.BROWSERLESS_TIMEOUT_MS || '90000', 10),
+    proxySticky: process.env.BROWSERLESS_PROXY_STICKY !== 'false',
+    serverTimeoutMs: parseInt(process.env.BROWSERLESS_UNBLOCK_TIMEOUT_MS || '120000', 10),
     alwaysOn: browserlessAlways()
   };
 }
@@ -83,7 +84,9 @@ async function browserlessRaw(url, timeoutMs) {
   if (!token) return { status: null, html: null, error: 'BROWSERLESS_TOKEN not set' };
 
   const cfg = browserlessConfig();
-  const t = timeoutMs || cfg.timeoutMs;
+  // Client abort must outlast the server-side timeout, or we cut off a
+  // challenge that was about to clear.
+  const t = timeoutMs || parseInt(process.env.BROWSERLESS_TIMEOUT_MS || String(cfg.serverTimeoutMs + 15000), 10);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), t);
   try {
@@ -102,7 +105,10 @@ async function browserlessRaw(url, timeoutMs) {
     if (cfg.proxy) {
       qs.set('proxy', cfg.proxy);
       if (cfg.proxyCountry) qs.set('proxyCountry', cfg.proxyCountry);
+      if (cfg.proxySticky) qs.set('proxySticky', 'true');
     }
+    qs.set('timeout', String(cfg.serverTimeoutMs));
+
     const res = await fetch(`${cfg.base}/unblock?${qs.toString()}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
