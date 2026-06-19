@@ -39,8 +39,8 @@ function browserlessAlways() {
 
 function looksChallenged(html) {
   if (!html) return false;
-  // A real article is large; a challenge/shell is usually tiny.
-  if (html.length < 1500) return true;
+  // Marker-based only. A small page is not automatically a challenge; thin
+  // article text is handled separately by the audit/crawl retries.
   return CHALLENGE_RE.test(html);
 }
 
@@ -65,15 +65,17 @@ async function fetchDirect(url, timeoutMs = 15000) {
   }
 }
 
-async function fetchViaBrowserless(url, timeoutMs = 45000) {
+async function fetchViaBrowserless(url, timeoutMs) {
   const token = process.env.BROWSERLESS_TOKEN;
   if (!token) return { ok: false, status: null, html: null, via: 'browserless', error: 'BROWSERLESS_TOKEN not set' };
 
   const base = (process.env.BROWSERLESS_URL || 'https://production-sfo.browserless.io').replace(/\/$/, '');
   const mode = (process.env.BROWSERLESS_MODE || 'unblock').toLowerCase();
+  // Residential-proxy unblocking can take a while; default to 90s.
+  const t = timeoutMs || parseInt(process.env.BROWSERLESS_TIMEOUT_MS || '90000', 10);
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), t);
   try {
     if (mode === 'content') {
       const res = await fetch(`${base}/content?token=${encodeURIComponent(token)}`, {
