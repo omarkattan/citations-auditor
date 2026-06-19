@@ -4,30 +4,118 @@ const path = require('path');
 const { discover } = require('./discover');
 const { auditPage, auditText, diagnose } = require('./audit');
 const { logScan, getScans, logPages, getPages, ensureTabs, storageMode } = require('./sheets');
+const db = require('./db');
+const payments = require('./payments');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || 'sandstorm2026';
 const MAX_PAGES_CAP = 25;
+const FREE_PAGES = parseInt(process.env.FREE_PAGES || '3', 10);
+
+// Render runs behind a proxy; needed so req.ip is the real client IP.
+app.set('trust proxy', true);
+
+// Stripe webhook needs the raw body for signature verification, so it must be
+// registered before the JSON body parser.
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    const event = payments.verifyWebhook(req.body, req.headers['stripe-signature']);
+    if (event.type === 'checkout.session.completed') {
+      await payments.fulfillSession(event.data.object.id);
+    }
+    res.json({ received: true });
+  } catch (err) {
+    res.status(400).send(`Webhook error: ${err.message}`);
+  }
+});
 
 // Serve the single-page UI from the repo root.
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/success', (_req, res) => res.sendFile(path.join(__dirname, 'success.html')));
 
 app.use(express.json({ limit: '2mb' }));
 
 // Keep-alive endpoint for cron-job.org (free-tier cold starts).
 app.get('/healthz', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
+// ---- Credits / payments -----------------------------------------------------
+
+// Resolve who is paying for a scan and how many pages they can run.
+// Returns { paywall, type, code, ip, balance } or { paywall:false }.
+async function resolveAccount(req) {
+  if (!db.enabled()) return { paywall: false, balance: Infinity };
+  const code = (req.query.code || (req.body && req.body.code) || '').trim();
+  if (code) {
+    const b = await db.getCodeBalance(code);
+    if (!b) return { paywall: true, invalid: true, balance: 0 };
+    return { paywall: true, type: 'code', code, balance: b.balance };
+  }
+  const free = await db.getFreeRemaining(req.ip, FREE_PAGES);
+  return { paywall: true, type: 'free', ip: req.ip, balance: free };
+}
+
+async function chargeAccount(account, n) {
+  if (!account || !account.paywall || n <= 0) return;
+  if (account.type === 'code') await db.consumeCode(account.code, n);
+  else if (account.type === 'free') await db.consumeFree(account.ip, n);
+}
+
+// Current balance for the UI: a code's balance, or the IP's free remaining.
+app.get('/api/credits', async (req, res) => {
+  if (!db.enabled()) return res.json({ paywall: false });
+  const code = (req.query.code || '').trim();
+  if (code) {
+    const b = await db.getCodeBalance(code);
+    return res.json({ paywall: true, valid: Boolean(b), type: 'code', balance: b ? b.balance : 0 });
+  }
+  const free = await db.getFreeRemaining(req.ip, FREE_PAGES);
+  res.json({ paywall: true, type: 'free', balance: free, freeLimit: FREE_PAGES });
+});
+
+app.get('/api/packages', (_req, res) => {
+  res.json({ paymentsEnabled: payments.enabled(), packages: Object.values(payments.PACKAGES) });
+});
+
+app.post('/api/checkout', async (req, res) => {
+  try {
+    const origin = `${req.protocol}://${req.get('host')}`;
+    const url = await payments.createCheckout((req.body || {}).package, origin);
+    res.json({ url });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/checkout/result', async (req, res) => {
+  try {
+    const result = await payments.fulfillSession(req.query.session_id);
+    if (!result) return res.status(402).json({ error: 'Payment not completed yet.' });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Audit text the user pasted in (used when a site blocks automated fetches).
 app.post('/api/audit-text', async (req, res) => {
   const { text, url, findSources } = req.body || {};
   if (!text || !text.trim()) return res.status(400).json({ error: 'No text provided.' });
+
+  const account = await resolveAccount(req);
+  if (account.paywall) {
+    if (account.invalid) return res.status(402).json({ error: 'That access code is not valid.' });
+    if (account.balance <= 0) {
+      return res.status(402).json({ error: account.type === 'free' ? 'Free trial used up. Buy credits to continue.' : 'No credits left on that code.' });
+    }
+  }
 
   const started = Date.now();
   const label = (url || '').trim() || 'Pasted text';
   try {
     const result = await auditText(text, { url: label, findSources: findSources !== false });
     const claims = result.claims || [];
+    if (account.paywall && !result.error) await chargeAccount(account, 1);
     await logScan({
       url: label,
       source: 'paste',
@@ -43,6 +131,7 @@ app.post('/api/audit-text', async (req, res) => {
       high: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
       root: label
     }]);
+    if (account.paywall) result.balance = Math.max(0, account.balance - (result.error ? 0 : 1));
     res.json(result);
   } catch (err) {
     res.status(500).json({ url: label, error: `Audit failed: ${err.message}`, claims: [] });
@@ -91,17 +180,42 @@ app.get('/api/scan/stream', async (req, res) => {
 
   const started = Date.now();
   try {
+    // Resolve the paying account and gate on balance.
+    const account = await resolveAccount(req);
+    if (account.paywall) {
+      if (account.invalid) {
+        send('error', { message: 'That access code is not valid.' });
+        return res.end();
+      }
+      if (account.balance <= 0) {
+        send('error', {
+          message: account.type === 'free' ? 'Free trial used up. Buy credits to continue.' : 'No credits left on that code.',
+          needCredits: true
+        });
+        return res.end();
+      }
+    }
+
     send('status', { message: source === 'single' ? 'Loading the page...' : 'Discovering pages...' });
-    const pages = await discover(source, url, { maxPages, pathPrefix });
+    let pages = await discover(source, url, { maxPages, pathPrefix });
 
     if (!pages.length) {
       send('error', { message: 'No pages found for that source.' });
       return res.end();
     }
-    send('pages', { count: pages.length, urls: pages });
+
+    // Never audit more pages than the account can pay for.
+    let capped = false;
+    if (account.paywall && pages.length > account.balance) {
+      pages = pages.slice(0, account.balance);
+      capped = true;
+    }
+
+    send('pages', { count: pages.length, urls: pages, capped });
 
     let totalClaims = 0;
     let highSeverity = 0;
+    let charged = 0;
     const pageRows = [];
 
     for (let i = 0; i < pages.length; i++) {
@@ -114,10 +228,13 @@ app.get('/api/scan/stream', async (req, res) => {
       const high = claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length;
       totalClaims += claims.length;
       highSeverity += high;
+      if (!result.error) charged += 1; // only charge pages that actually ran
       pageRows.push({ pageUrl: result.url, source, claims: claims.length, high, root: url });
 
       send('page', result);
     }
+
+    if (account.paywall && charged > 0) await chargeAccount(account, charged);
 
     const durationSec = Math.round((Date.now() - started) / 1000);
     await logScan({
@@ -130,7 +247,9 @@ app.get('/api/scan/stream', async (req, res) => {
     });
     await logPages(pageRows);
 
-    send('done', { pagesScanned: pages.length, totalClaims, highSeverity, durationSec });
+    const done = { pagesScanned: pages.length, totalClaims, highSeverity, durationSec, capped };
+    if (account.paywall) done.balance = Math.max(0, account.balance - charged);
+    send('done', done);
   } catch (err) {
     send('error', { message: err.message || 'Scan failed.' });
   } finally {
@@ -241,4 +360,5 @@ function adminShell(body) {
 app.listen(PORT, () => {
   console.log(`Claims Auditor listening on ${PORT}`);
   ensureTabs();
+  db.init().catch((e) => console.error('db.init failed:', e.message));
 });

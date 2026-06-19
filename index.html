@@ -117,6 +117,25 @@
     padding: 7px 14px; border-radius: 6px; }
   .dl-btn:hover { background: var(--green); color: #06150c; }
 
+  /* credits */
+  .credits-bar { display: none; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; margin-bottom: 18px; }
+  .cb-balance { font-family: var(--mono); font-weight: 700; color: var(--green); font-size: 14px; }
+  .cb-note { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: 8px; }
+  .cb-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .cb-right input { width: 200px; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    font-family: var(--mono); font-size: 12px; padding: 8px 10px; border-radius: 6px; }
+  .cb-apply, .cb-buy { font-family: var(--mono); font-size: 12px; font-weight: 600; cursor: pointer; padding: 8px 12px; border-radius: 6px; }
+  .cb-apply { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  .cb-buy { background: var(--green); color: #06150c; border: none; }
+  .buy-panel { display: none; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  .pkg { flex: 1; min-width: 180px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .pkg h3 { margin: 0 0 4px; font-family: var(--mono); font-size: 14px; color: var(--green); }
+  .pkg .price { font-family: var(--mono); font-size: 24px; font-weight: 700; }
+  .pkg .cr { color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
+  .pkg button { width: 100%; background: var(--green); color: #06150c; border: none; border-radius: 6px;
+    font-family: var(--mono); font-weight: 700; font-size: 13px; padding: 10px; cursor: pointer; }
+
   /* pages tested index */
   .index-panel { display: none; border: 1px solid var(--line); border-radius: 10px;
     margin-bottom: 22px; overflow: hidden; }
@@ -175,6 +194,19 @@
     <h1>Claims Auditor<span class="cursor">_</span></h1>
     <p class="sub">Point it at a site. It crawls the pages, flags claims that assert something without backing it up, maps each to the E-E-A-T pillar it weakens, and hands you the fix plus a real citation to use.</p>
   </header>
+
+  <div class="credits-bar" id="creditsBar">
+    <div>
+      <span class="cb-balance" id="cbBalance">Credits: -</span>
+      <span class="cb-note" id="cbNote"></span>
+    </div>
+    <div class="cb-right">
+      <input type="text" id="codeInput" placeholder="Access code" autocomplete="off" spellcheck="false">
+      <button class="cb-apply" id="applyCode">Apply</button>
+      <button class="cb-buy" id="buyToggle">Buy credits</button>
+    </div>
+  </div>
+  <div class="buy-panel" id="buyPanel"></div>
 
   <div class="panel">
     <label class="field" for="url">Site URL</label>
@@ -373,13 +405,14 @@
 
     const params = new URLSearchParams({ url, source, maxPages, findSources: 'true' });
     if (source === 'crawl' && pathPrefix) params.set('path', pathPrefix);
+    if (accessCode) params.set('code', accessCode);
 
     const es = new EventSource('/api/scan/stream?' + params.toString());
 
     es.addEventListener('status', (e) => log('> ' + JSON.parse(e.data).message, 'dim'));
     es.addEventListener('pages', (e) => {
       const d = JSON.parse(e.data);
-      log('> found ' + d.count + ' page' + (d.count === 1 ? '' : 's'), 'ok');
+      log('> found ' + d.count + ' page' + (d.count === 1 ? '' : 's') + (d.capped ? ' (limited to your credits)' : ''), 'ok');
       renderIndex(d.urls || []);
     });
     es.addEventListener('page', (e) => {
@@ -395,14 +428,17 @@
       log('> done in ' + d.durationSec + 's', 'ok');
       renderSummary(d);
       if (scanData.length) downloads.style.display = 'flex';
+      if (d.balance !== undefined) setBalance(d.balance);
       es.close();
       runBtn.disabled = false;
       runBtn.textContent = 'Run audit';
     });
     es.addEventListener('error', (e) => {
       let msg = 'Connection lost.';
-      try { if (e.data) msg = JSON.parse(e.data).message; } catch {}
+      let needCredits = false;
+      try { if (e.data) { const d = JSON.parse(e.data); msg = d.message; needCredits = d.needCredits; } } catch {}
       log('> error: ' + msg, 'err');
+      if (needCredits) showBuyPanel();
       es.close();
       runBtn.disabled = false;
       runBtn.textContent = 'Run audit';
@@ -434,9 +470,14 @@
       const res = await fetch('/api/audit-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, url, findSources: true })
+        body: JSON.stringify({ text, url, findSources: true, code: accessCode })
       });
       const page = await res.json();
+      if (res.status === 402) {
+        log('> ' + (page.error || 'Out of credits'), 'err');
+        showBuyPanel();
+        return;
+      }
       if (!res.ok && !page.url) {
         log('> error: ' + (page.error || 'audit failed'), 'err');
         return;
@@ -456,6 +497,7 @@
         durationSec: Math.round((Date.now() - started) / 1000)
       });
       if (scanData.length) downloads.style.display = 'flex';
+      if (page.balance !== undefined) setBalance(page.balance);
       log('> done', 'ok');
     } catch (err) {
       log('> error: ' + err.message, 'err');
@@ -567,6 +609,78 @@
 
   runBtn.addEventListener('click', start);
   document.getElementById('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') start(); });
+
+  // ---- credits / payments ----
+  let accessCode = '';
+  try { accessCode = localStorage.getItem('claims_code') || ''; } catch {}
+  let paywall = false;
+
+  const creditsBar = document.getElementById('creditsBar');
+  const buyPanel = document.getElementById('buyPanel');
+  const cbBalance = document.getElementById('cbBalance');
+  const cbNote = document.getElementById('cbNote');
+  const codeInput = document.getElementById('codeInput');
+
+  function setBalance(n) { cbBalance.textContent = 'Credits: ' + n; }
+
+  async function refreshCredits() {
+    try {
+      const q = accessCode ? ('?code=' + encodeURIComponent(accessCode)) : '';
+      const d = await (await fetch('/api/credits' + q)).json();
+      paywall = !!d.paywall;
+      if (!paywall) return;
+      setBalance(d.balance != null ? d.balance : 0);
+      cbNote.textContent = accessCode ? (d.valid ? '(code applied)' : '(invalid code)') : '(free trial)';
+    } catch {}
+  }
+
+  function showBuyPanel() { buyPanel.style.display = 'flex'; buyPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+
+  async function buyPackage(id, enabled) {
+    if (!enabled) { alert('Payments are not configured yet.'); return; }
+    try {
+      const res = await fetch('/api/checkout', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ package: id })
+      });
+      const d = await res.json();
+      if (d.url) location.href = d.url;
+      else alert(d.error || 'Could not start checkout.');
+    } catch { alert('Could not start checkout.'); }
+  }
+
+  function renderBuyPanel(packages, enabled) {
+    buyPanel.innerHTML = packages.map((p) =>
+      '<div class="pkg"><h3>' + esc(p.name) + '</h3>' +
+      '<div class="price">$' + (p.amount / 100).toFixed(2) + '</div>' +
+      '<div class="cr">' + p.credits + ' page credits</div>' +
+      '<button data-pkg="' + esc(p.id) + '">Buy</button></div>'
+    ).join('');
+    buyPanel.querySelectorAll('button[data-pkg]').forEach((b) =>
+      b.addEventListener('click', () => buyPackage(b.dataset.pkg, enabled)));
+  }
+
+  async function initCredits() {
+    try {
+      const pkg = await (await fetch('/api/packages')).json();
+      await refreshCredits();
+      if (!paywall) return;
+      creditsBar.style.display = 'flex';
+      renderBuyPanel(pkg.packages || [], pkg.paymentsEnabled);
+      if (accessCode) codeInput.value = accessCode;
+    } catch {}
+  }
+
+  document.getElementById('applyCode').addEventListener('click', async () => {
+    accessCode = codeInput.value.trim().toUpperCase();
+    try { localStorage.setItem('claims_code', accessCode); } catch {}
+    await refreshCredits();
+  });
+  document.getElementById('buyToggle').addEventListener('click', () => {
+    buyPanel.style.display = buyPanel.style.display === 'flex' ? 'none' : 'flex';
+  });
+
+  initCredits();
 </script>
 </body>
 </html>
