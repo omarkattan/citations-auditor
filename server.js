@@ -2,7 +2,7 @@
 const express = require('express');
 const path = require('path');
 const { discover } = require('./discover');
-const { auditPage, diagnose } = require('./audit');
+const { auditPage, auditText, diagnose } = require('./audit');
 const { logScan, getScans } = require('./sheets');
 
 const app = express();
@@ -13,8 +13,34 @@ const MAX_PAGES_CAP = 25;
 // Serve the single-page UI from the repo root.
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
+app.use(express.json({ limit: '2mb' }));
+
 // Keep-alive endpoint for cron-job.org (free-tier cold starts).
 app.get('/healthz', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// Audit text the user pasted in (used when a site blocks automated fetches).
+app.post('/api/audit-text', async (req, res) => {
+  const { text, url, findSources } = req.body || {};
+  if (!text || !text.trim()) return res.status(400).json({ error: 'No text provided.' });
+
+  const started = Date.now();
+  const label = (url || '').trim() || 'Pasted text';
+  try {
+    const result = await auditText(text, { url: label, findSources: findSources !== false });
+    const claims = result.claims || [];
+    await logScan({
+      url: label,
+      source: 'paste',
+      pagesScanned: 1,
+      claimsFound: claims.length,
+      highSeverity: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
+      durationSec: Math.round((Date.now() - started) / 1000)
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ url: label, error: `Audit failed: ${err.message}`, claims: [] });
+  }
+});
 
 // Diagnostic probe: makes one minimal API call and returns the raw error
 // detail so we can see what is actually failing. Guarded by the admin key.

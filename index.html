@@ -61,6 +61,13 @@
   }
   input[type=text]:focus, select:focus { border-color: var(--green-dim); }
 
+  textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--line);
+    color: var(--text); font-family: var(--mono); font-size: 13px; line-height: 1.5;
+    padding: 12px 14px; border-radius: 8px; outline: none; resize: vertical; min-height: 160px;
+  }
+  textarea:focus { border-color: var(--green-dim); }
+
   .sources { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
   .src-btn {
     font-family: var(--mono); font-size: 12px; color: var(--muted);
@@ -168,8 +175,14 @@
       <div class="sources" id="sources">
         <button class="src-btn" data-src="crawl" aria-pressed="true">Crawl site</button>
         <button class="src-btn" data-src="single" aria-pressed="false">Single URL</button>
+        <button class="src-btn" data-src="paste" aria-pressed="false">Paste text</button>
       </div>
       <div class="src-note" id="srcNote">Follows internal links from the URL you enter. Add a folder to limit the scope.</div>
+    </div>
+
+    <div id="pasteWrap" style="margin-top:16px; display:none">
+      <label class="field" for="pasteText">Page text</label>
+      <textarea id="pasteText" placeholder="Paste the page's text here, then run the audit." spellcheck="false"></textarea>
     </div>
 
     <div class="row">
@@ -205,7 +218,8 @@
 <script>
   const SOURCE_NOTES = {
     crawl: 'Follows internal links from the URL you enter. Add a folder to limit the scope.',
-    single: 'Audits only the single URL you enter.'
+    single: 'Audits only the single URL you enter.',
+    paste: 'Audits text you paste in. Use this when a site blocks the fetch. The URL field is optional, just a label.'
   };
 
   let source = 'crawl';
@@ -213,6 +227,8 @@
   const srcNote = document.getElementById('srcNote');
   const pathWrap = document.getElementById('pathWrap');
   const maxWrap = document.getElementById('maxWrap');
+  const pasteWrap = document.getElementById('pasteWrap');
+  const pasteText = document.getElementById('pasteText');
 
   sourcesEl.addEventListener('click', (e) => {
     const btn = e.target.closest('.src-btn');
@@ -223,6 +239,7 @@
     const crawl = source === 'crawl';
     pathWrap.style.display = crawl ? 'block' : 'none';
     maxWrap.style.display = crawl ? 'block' : 'none';
+    pasteWrap.style.display = source === 'paste' ? 'block' : 'none';
   });
 
   const term = document.getElementById('term');
@@ -369,8 +386,64 @@
     });
   }
 
-  runBtn.addEventListener('click', run);
-  document.getElementById('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+  async function runPasteAudit() {
+    const text = pasteText.value.trim();
+    if (!text) { pasteText.focus(); return; }
+    const url = document.getElementById('url').value.trim() || 'Pasted text';
+
+    term.style.display = 'block';
+    term.innerHTML = '';
+    summary.style.display = 'none';
+    summary.innerHTML = '';
+    indexPanel.style.display = 'none';
+    indexPanel.innerHTML = '';
+    results.innerHTML = '';
+    pageIndex = {};
+    runBtn.disabled = true;
+    runBtn.textContent = 'Auditing...';
+
+    const started = Date.now();
+    log('> auditing pasted text', 'dim');
+    try {
+      const res = await fetch('/api/audit-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, url, findSources: true })
+      });
+      const page = await res.json();
+      if (!res.ok && !page.url) {
+        log('> error: ' + (page.error || 'audit failed'), 'err');
+        return;
+      }
+      const claims = page.claims || [];
+      log('  ' + (page.error ? '! ' : (claims.length ? '? ' : 'ok ')) + page.url +
+        (page.error ? ' (' + page.error + ')' : ' (' + claims.length + ' claim' + (claims.length === 1 ? '' : 's') + ')'),
+        page.error ? 'err' : (claims.length ? '' : 'ok'));
+      renderIndex([page.url]);
+      updateIndex(page);
+      renderPage(page);
+      renderSummary({
+        pagesScanned: 1,
+        totalClaims: claims.length,
+        highSeverity: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
+        durationSec: Math.round((Date.now() - started) / 1000)
+      });
+      log('> done', 'ok');
+    } catch (err) {
+      log('> error: ' + err.message, 'err');
+    } finally {
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run audit';
+    }
+  }
+
+  function start() {
+    if (source === 'paste') runPasteAudit();
+    else run();
+  }
+
+  runBtn.addEventListener('click', start);
+  document.getElementById('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') start(); });
 </script>
 </body>
 </html>

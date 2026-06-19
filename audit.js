@@ -188,27 +188,56 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
     return { url, title, error: 'Too little readable text to audit.', claims: [] };
   }
 
+  return runClaims(url, title, text, findSources, key);
+}
+
+// Audit text the user pasted in (used when a site blocks automated fetches).
+// Accepts either plain page copy or raw HTML.
+async function auditText(rawText, { url = 'Pasted text', title = '', apiKey, findSources = true } = {}) {
+  const key = apiKey || process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('ANTHROPIC_API_KEY is not set.');
+
+  let text = (rawText || '').trim();
+  if (/<[a-z!][\s\S]*>/i.test(text)) {
+    const extracted = extractText(text);
+    text = extracted.text;
+    if (!title && extracted.title) title = extracted.title;
+  } else {
+    text = text.replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT_CHARS);
+  }
+
+  if (!text || text.length < 120) {
+    return { url, title, error: 'Too little text to audit. Paste the page copy and try again.', claims: [] };
+  }
+
+  return runClaims(url, title, text, findSources, key);
+}
+
+// Shared core: send the page text to Claude and return parsed claims, with a
+// recommendation-only fallback if the web-search call fails.
+async function runClaims(url, title, text, findSources, apiKey) {
+  const key = apiKey || process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('ANTHROPIC_API_KEY is not set.');
+
   const client = makeClient(key, { maxRetries: 3, timeout: 120000 });
   const userContent = `Page URL: ${url}\nPage title: ${title}\n\nPage text:\n"""\n${text}\n"""`;
 
-  let raw;
   try {
-    raw = await callClaude(client, userContent, findSources);
+    const raw = await callClaude(client, userContent, findSources);
+    return { url, title, claims: parseClaims(raw) };
   } catch (err) {
     // If web search is unavailable on this account, fall back to
-    // recommendation-only so the scan still completes.
+    // recommendation-only so the audit still completes.
     if (findSources) {
       try {
-        raw = await callClaude(client, userContent, false);
+        const raw = await callClaude(client, userContent, false);
+        return { url, title, claims: parseClaims(raw) };
       } catch (err2) {
         return { url, title, error: `Audit failed: ${describeError(err2)}`, claims: [] };
       }
-    } else {
-      return { url, title, error: `Audit failed: ${describeError(err)}`, claims: [] };
     }
+    return { url, title, error: `Audit failed: ${describeError(err)}`, claims: [] };
   }
-
-  return { url, title, claims: parseClaims(raw) };
 }
 
 function describeError(err) {
@@ -302,4 +331,4 @@ async function diagnose() {
   };
 }
 
-module.exports = { auditPage, extractText, parseClaims, diagnose };
+module.exports = { auditPage, auditText, extractText, parseClaims, diagnose };
