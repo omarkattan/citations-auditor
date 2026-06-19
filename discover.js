@@ -5,18 +5,7 @@
 //   single - audit only the single URL entered
 
 const cheerio = require('cheerio');
-
-const BROWSER_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Upgrade-Insecure-Requests': '1',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Sec-Fetch-User': '?1'
-};
+const { fetchHtml } = require('./fetchpage');
 
 const SKIP_EXTENSIONS = [
   '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico',
@@ -43,22 +32,9 @@ function looksLikePage(url) {
   return !SKIP_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
-async function fetchText(url, timeoutMs = 15000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      headers: BROWSER_HEADERS,
-      signal: controller.signal,
-      redirect: 'follow'
-    });
-    if (!res.ok) return null;
-    return await res.text();
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+async function fetchText(url) {
+  const r = await fetchHtml(url);
+  return r.ok ? r.html : null;
 }
 
 // ---- Source: crawl / folder -------------------------------------------------

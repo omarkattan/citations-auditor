@@ -6,24 +6,10 @@
 const cheerio = require('cheerio');
 const Anthropic = require('@anthropic-ai/sdk');
 const https = require('node:https');
+const { fetchHtml, fetchViaBrowserless, browserlessConfigured } = require('./fetchpage');
 
 const MODEL = process.env.CLAIMS_MODEL || 'claude-sonnet-4-6';
-const USER_AGENT = 'SandstormClaimsAuditor/1.0 (+https://sandstormdigital.com)';
 const MAX_TEXT_CHARS = 8000;
-
-// Browser-like headers. Many sites return 403 to non-browser User-Agents, so we
-// present as Chrome on a normal page navigation.
-const BROWSER_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Upgrade-Insecure-Requests': '1',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Sec-Fetch-User': '?1'
-};
 
 // Build a dedicated dispatcher that does not reuse pooled sockets. A consistent
 // "Premature close" usually comes from undici handing back a connection the far
@@ -158,32 +144,33 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set.');
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
-  let html;
-  try {
-    const res = await fetch(url, {
-      headers: BROWSER_HEADERS,
-      signal: controller.signal,
-      redirect: 'follow'
-    });
-    if (!res.ok) {
-      const blocked = res.status === 403 || res.status === 401 || res.status === 429;
-      const msg = blocked
-        ? `Blocked by the site (HTTP ${res.status}), likely bot protection.`
-        : `Could not fetch page (HTTP ${res.status})`;
-      return { url, error: msg, claims: [] };
+  const fetched = await fetchHtml(url);
+  if (!fetched.ok) {
+    if (fetched.notHtml) return { url, error: 'Not an HTML page, skipped.', claims: [] };
+    if (fetched.blocked) {
+      const note = browserlessConfigured()
+        ? ', even through Browserless. Try Paste text.'
+        : '. Connect Browserless or use Paste text.';
+      return { url, error: `Blocked by the site (HTTP ${fetched.status})${note}`, claims: [] };
     }
-    const type = res.headers.get('content-type') || '';
-    if (!type.includes('html')) return { url, error: 'Not an HTML page, skipped.', claims: [] };
-    html = await res.text();
-  } catch {
-    return { url, error: 'Page timed out or could not be reached.', claims: [] };
-  } finally {
-    clearTimeout(timer);
+    return { url, error: fetched.error || 'Page could not be reached.', claims: [] };
   }
 
-  const { title, text } = extractText(html);
+  let { title, text } = extractText(fetched.html);
+
+  // If a direct fetch returned almost no text, the page is probably rendered by
+  // JavaScript. If Browserless is configured, render it properly and retry.
+  if ((!text || text.length < 120) && fetched.via === 'direct' && browserlessConfigured()) {
+    const rendered = await fetchViaBrowserless(url);
+    if (rendered.ok) {
+      const ex = extractText(rendered.html);
+      if (ex.text && ex.text.length > (text || '').length) {
+        title = ex.title || title;
+        text = ex.text;
+      }
+    }
+  }
+
   if (!text || text.length < 120) {
     return { url, title, error: 'Too little readable text to audit.', claims: [] };
   }
@@ -326,6 +313,7 @@ async function diagnose() {
   return {
     model: MODEL,
     usingCustomDispatcher: Boolean(customFetch),
+    browserless: browserlessConfigured(),
     rawHttps: raw,
     sdk
   };
