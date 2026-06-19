@@ -58,7 +58,7 @@ app.get('/api/scan/stream', async (req, res) => {
 
   const started = Date.now();
   try {
-    send('status', { message: `Discovering pages via ${source}...` });
+    send('status', { message: source === 'single' ? 'Loading the page...' : 'Discovering pages...' });
     const pages = await discover(source, url, { maxPages, pathPrefix });
 
     if (!pages.length) {

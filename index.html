@@ -72,7 +72,7 @@
 
   .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: end; margin-top: 16px; }
   .row > div { flex: 1; min-width: 140px; }
-  #pathWrap { display: none; }
+  #pathWrap { display: block; }
 
   button.run {
     font-family: var(--mono); font-weight: 700; font-size: 14px;
@@ -99,6 +99,22 @@
   .stat .n { font-family: var(--mono); font-size: 26px; font-weight: 700; }
   .stat .l { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
   .stat.high .n { color: var(--high); }
+
+  /* pages tested index */
+  .index-panel { display: none; border: 1px solid var(--line); border-radius: 10px;
+    margin-bottom: 22px; overflow: hidden; }
+  .index-panel .ih { background: var(--panel-2); padding: 12px 16px; border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--green); }
+  .idx-row { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; }
+  .idx-row:last-child { border-bottom: none; }
+  .idx-row a { color: var(--text); text-decoration: none; word-break: break-all; flex: 1; }
+  .idx-row a:hover { color: var(--green); }
+  .idx-status { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
+  .idx-status.has { color: var(--med); }
+  .idx-status.clean { color: var(--green); }
+  .idx-status.err { color: var(--high); }
+  .idx-status.pending { color: var(--low); }
 
   /* page groups */
   .page-group { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
@@ -148,23 +164,20 @@
     <input type="text" id="url" placeholder="https://example.com" autocomplete="off" spellcheck="false">
 
     <div style="margin-top:16px">
-      <label class="field">Source</label>
+      <label class="field">Mode</label>
       <div class="sources" id="sources">
-        <button class="src-btn" data-src="crawl" aria-pressed="true">Crawl from homepage</button>
-        <button class="src-btn" data-src="folder" aria-pressed="false">Specific folder</button>
-        <button class="src-btn" data-src="sitemap" aria-pressed="false">XML sitemap</button>
-        <button class="src-btn" data-src="gsc" aria-pressed="false">Search Console</button>
-        <button class="src-btn" data-src="ahrefs" aria-pressed="false">Ahrefs</button>
+        <button class="src-btn" data-src="crawl" aria-pressed="true">Crawl site</button>
+        <button class="src-btn" data-src="single" aria-pressed="false">Single URL</button>
       </div>
-      <div class="src-note" id="srcNote">Follows internal links starting at the homepage.</div>
+      <div class="src-note" id="srcNote">Follows internal links from the URL you enter. Add a folder to limit the scope.</div>
     </div>
 
     <div class="row">
       <div id="pathWrap">
-        <label class="field" for="path">Folder path</label>
+        <label class="field" for="path">Folder (optional)</label>
         <input type="text" id="path" placeholder="/blog" autocomplete="off" spellcheck="false">
       </div>
-      <div>
+      <div id="maxWrap">
         <label class="field" for="maxPages">Max pages</label>
         <select id="maxPages">
           <option>5</option>
@@ -181,6 +194,7 @@
 
   <div class="term" id="term"></div>
   <div class="summary" id="summary"></div>
+  <div class="index-panel" id="indexPanel"></div>
   <div id="results"></div>
 
   <footer>
@@ -190,17 +204,15 @@
 
 <script>
   const SOURCE_NOTES = {
-    crawl: 'Follows internal links starting at the homepage.',
-    folder: 'Crawls but only audits pages under the path you set.',
-    sitemap: 'Reads /sitemap.xml (and sitemap index files).',
-    gsc: 'Pulls top pages from Google Search Console. Needs the service account added to the property.',
-    ahrefs: 'Pulls top pages by traffic from Ahrefs. Needs AHREFS_API_KEY set.'
+    crawl: 'Follows internal links from the URL you enter. Add a folder to limit the scope.',
+    single: 'Audits only the single URL you enter.'
   };
 
   let source = 'crawl';
   const sourcesEl = document.getElementById('sources');
   const srcNote = document.getElementById('srcNote');
   const pathWrap = document.getElementById('pathWrap');
+  const maxWrap = document.getElementById('maxWrap');
 
   sourcesEl.addEventListener('click', (e) => {
     const btn = e.target.closest('.src-btn');
@@ -208,13 +220,17 @@
     source = btn.dataset.src;
     [...sourcesEl.children].forEach((b) => b.setAttribute('aria-pressed', b === btn));
     srcNote.textContent = SOURCE_NOTES[source];
-    pathWrap.style.display = source === 'folder' ? 'block' : 'none';
+    const crawl = source === 'crawl';
+    pathWrap.style.display = crawl ? 'block' : 'none';
+    maxWrap.style.display = crawl ? 'block' : 'none';
   });
 
   const term = document.getElementById('term');
   const summary = document.getElementById('summary');
   const results = document.getElementById('results');
+  const indexPanel = document.getElementById('indexPanel');
   const runBtn = document.getElementById('run');
+  let pageIndex = {};
 
   function log(text, cls = '') {
     const ln = document.createElement('div');
@@ -262,7 +278,33 @@
     }).join('');
 
     group.innerHTML = head + body;
+    if (pageIndex[page.url] !== undefined) group.id = 'pg-' + pageIndex[page.url];
     results.appendChild(group);
+  }
+
+  function renderIndex(urls) {
+    pageIndex = {};
+    const rows = urls.map((u, i) => {
+      pageIndex[u] = i;
+      return `<div class="idx-row" id="idx-${i}">
+        <a href="#pg-${i}">${esc(u)}</a>
+        <span class="idx-status pending">queued</span>
+      </div>`;
+    }).join('');
+    indexPanel.style.display = 'block';
+    indexPanel.innerHTML = `<div class="ih">Pages tested (${urls.length})</div>` + rows;
+  }
+
+  function updateIndex(page) {
+    const i = pageIndex[page.url];
+    if (i === undefined) return;
+    const row = document.getElementById('idx-' + i);
+    if (!row) return;
+    const status = row.querySelector('.idx-status');
+    const n = (page.claims || []).length;
+    if (page.error) { status.className = 'idx-status err'; status.textContent = 'error'; }
+    else if (!n) { status.className = 'idx-status clean'; status.textContent = 'clean'; }
+    else { status.className = 'idx-status has'; status.textContent = n + ' claim' + (n === 1 ? '' : 's'); }
   }
 
   function renderSummary(d) {
@@ -277,19 +319,22 @@
   function run() {
     const url = document.getElementById('url').value.trim();
     if (!url) { document.getElementById('url').focus(); return; }
-    const maxPages = document.getElementById('maxPages').value;
     const pathPrefix = document.getElementById('path').value.trim();
+    const maxPages = source === 'single' ? '1' : document.getElementById('maxPages').value;
 
     term.style.display = 'block';
     term.innerHTML = '';
     summary.style.display = 'none';
     summary.innerHTML = '';
+    indexPanel.style.display = 'none';
+    indexPanel.innerHTML = '';
     results.innerHTML = '';
+    pageIndex = {};
     runBtn.disabled = true;
     runBtn.textContent = 'Auditing...';
 
     const params = new URLSearchParams({ url, source, maxPages, findSources: 'true' });
-    if (source === 'folder' && pathPrefix) params.set('path', pathPrefix);
+    if (source === 'crawl' && pathPrefix) params.set('path', pathPrefix);
 
     const es = new EventSource('/api/scan/stream?' + params.toString());
 
@@ -297,11 +342,13 @@
     es.addEventListener('pages', (e) => {
       const d = JSON.parse(e.data);
       log('> found ' + d.count + ' page' + (d.count === 1 ? '' : 's'), 'ok');
+      renderIndex(d.urls || []);
     });
     es.addEventListener('page', (e) => {
       const page = JSON.parse(e.data);
       const n = (page.claims || []).length;
       log('  ' + (page.error ? '! ' : (n ? '? ' : 'ok ')) + page.url + (page.error ? ' (' + page.error + ')' : ' (' + n + ' claim' + (n === 1 ? '' : 's') + ')'), page.error ? 'err' : (n ? '' : 'ok'));
+      updateIndex(page);
       renderPage(page);
     });
     es.addEventListener('done', (e) => {
