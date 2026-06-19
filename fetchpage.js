@@ -142,7 +142,7 @@ async function browserlessRaw(url, timeoutMs) {
     const res = await fetch(`${cfg.base}/unblock?${qs.toString()}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, content: true, cookies: false, screenshot: false, browserWSEndpoint: false }),
+      body: JSON.stringify({ url, content: true, bestAttempt: true, cookies: false, screenshot: false }),
       signal: controller.signal
     });
     if (!res.ok) {
@@ -164,12 +164,26 @@ async function fetchViaBrowserless(url, timeoutMs) {
   return finalizeBrowserless(r.html);
 }
 
+// Detect an UNSOLVED bot interstitial. Important: Cloudflare leaves a
+// "challenge-platform" script reference in the HTML even after the challenge is
+// solved, so we must NOT treat that script as a block. Judge by the page title
+// and visible interstitial text instead.
+function isBlockInterstitial(html) {
+  if (!html) return true;
+  const head = html.slice(0, 8000);
+  const tm = head.match(/<title[^>]*>([^<]*)<\/title>/i);
+  const title = tm ? tm[1].toLowerCase() : '';
+  if (/just a moment|attention required|access denied|security check|verifying you are human|please wait|are you a robot/.test(title)) return true;
+  if (/verifying you are human|enable javascript and cookies to continue|needs to review the security of your connection|performing a security check before|ddos protection by|px-captcha|captcha-delivery|datadome/i.test(head)) return true;
+  return false;
+}
+
 // Treat a returned bot-detection page as a failure, not as real content, so the
 // auditor reports "still blocked" instead of analyzing the interstitial.
 function finalizeBrowserless(html) {
   if (!html) return { ok: false, status: 200, html: null, via: 'browserless', error: 'browserless returned no content' };
-  if (looksChallenged(html) || /just a moment|security verification|performing security|ray id/i.test(html.slice(0, 4000))) {
-    return { ok: false, status: 200, html: null, via: 'browserless', error: 'browserless got a challenge page (enable residential proxy)' };
+  if (isBlockInterstitial(html)) {
+    return { ok: false, status: 200, html: null, via: 'browserless', error: 'browserless got a challenge page (still blocked)' };
   }
   return { ok: true, status: 200, html, via: 'browserless', error: null };
 }
@@ -229,7 +243,7 @@ async function fetchDiagnostic(url) {
       status: raw.status,
       error: raw.error || null,
       htmlLen: raw.html ? raw.html.length : 0,
-      challenged: looksChallenged(raw.html || ''),
+      challenged: isBlockInterstitial(raw.html || ''),
       sample: (raw.html || '').replace(/\s+/g, ' ').slice(0, 200)
     };
   }
