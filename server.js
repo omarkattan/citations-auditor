@@ -2,7 +2,7 @@
 const express = require('express');
 const path = require('path');
 const { discover } = require('./discover');
-const { auditPage } = require('./audit');
+const { auditPage, diagnose } = require('./audit');
 const { logScan, getScans } = require('./sheets');
 
 const app = express();
@@ -15,6 +15,15 @@ app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 // Keep-alive endpoint for cron-job.org (free-tier cold starts).
 app.get('/healthz', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// Diagnostic probe: makes one minimal API call and returns the raw error
+// detail so we can see what is actually failing. Guarded by the admin key.
+app.get('/api/diag', async (req, res) => {
+  if (req.query.key !== ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  const result = await diagnose();
+  result.node = process.version;
+  res.json(result);
+});
 
 // ---- Streaming scan (Server-Sent Events) -----------------------------------
 

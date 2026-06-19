@@ -157,14 +157,61 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
       try {
         raw = await callClaude(client, userContent, false);
       } catch (err2) {
-        return { url, title, error: `Audit failed: ${err2.message}`, claims: [] };
+        return { url, title, error: `Audit failed: ${describeError(err2)}`, claims: [] };
       }
     } else {
-      return { url, title, error: `Audit failed: ${err.message}`, claims: [] };
+      return { url, title, error: `Audit failed: ${describeError(err)}`, claims: [] };
     }
   }
 
   return { url, title, claims: parseClaims(raw) };
 }
 
-module.exports = { auditPage, extractText, parseClaims };
+function describeError(err) {
+  const parts = [err.message || 'unknown error'];
+  const code = err.code || (err.cause && err.cause.code);
+  if (code) parts.push(`code=${code}`);
+  if (err.status) parts.push(`status=${err.status}`);
+  if (err.cause && err.cause.message && err.cause.message !== err.message) {
+    parts.push(`cause=${err.cause.message}`);
+  }
+  return parts.join(' ');
+}
+
+// Minimal, non-streaming probe so we can see the raw error if the API is
+// unreachable from this host. Used by GET /api/diag.
+async function diagnose() {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return { ok: false, stage: 'env', error: 'ANTHROPIC_API_KEY is not set.' };
+
+  const client = new Anthropic({ apiKey: key, maxRetries: 0, timeout: 60000 });
+  try {
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Reply with the word OK.' }]
+    });
+    const reply = (res.content || [])
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text)
+      .join('')
+      .trim();
+    return { ok: true, model: MODEL, reply };
+  } catch (err) {
+    return {
+      ok: false,
+      model: MODEL,
+      error: {
+        name: err.name,
+        message: err.message,
+        status: err.status || null,
+        code: err.code || null,
+        cause: err.cause
+          ? { name: err.cause.name, message: err.cause.message, code: err.cause.code }
+          : null
+      }
+    };
+  }
+}
+
+module.exports = { auditPage, extractText, parseClaims, diagnose };
