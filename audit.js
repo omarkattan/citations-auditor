@@ -88,8 +88,12 @@ async function callClaude(client, userContent, useWebSearch) {
   if (useWebSearch) {
     request.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }];
   }
-  const res = await client.messages.create(request);
-  return collectText(res.content);
+  // Stream the response. Server-side web search can make a single call run for
+  // many seconds; a non-streamed request tends to drop with "Premature close".
+  // Streaming keeps the connection alive and assembles the final message.
+  const stream = client.messages.stream(request);
+  const finalMessage = await stream.finalMessage();
+  return collectText(finalMessage.content);
 }
 
 async function auditPage(url, { apiKey, findSources = true } = {}) {
