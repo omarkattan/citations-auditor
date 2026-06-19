@@ -102,7 +102,9 @@ function browserlessConfig() {
     proxy: process.env.BROWSERLESS_PROXY || null,
     proxyCountry: process.env.BROWSERLESS_PROXY_COUNTRY || null,
     proxySticky: process.env.BROWSERLESS_PROXY_STICKY !== 'false',
-    serverTimeoutMs: parseInt(process.env.BROWSERLESS_UNBLOCK_TIMEOUT_MS || '120000', 10),
+    // Browserless caps the /unblock timeout at 60,000ms on this plan. Clamp so
+    // we never send a value it rejects with a 400.
+    serverTimeoutMs: Math.min(parseInt(process.env.BROWSERLESS_UNBLOCK_TIMEOUT_MS || '60000', 10), 60000),
     alwaysOn: browserlessAlways()
   };
 }
