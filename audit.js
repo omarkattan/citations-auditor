@@ -5,10 +5,34 @@
 
 const cheerio = require('cheerio');
 const Anthropic = require('@anthropic-ai/sdk');
+const https = require('node:https');
 
 const MODEL = process.env.CLAIMS_MODEL || 'claude-sonnet-4-6';
 const USER_AGENT = 'SandstormClaimsAuditor/1.0 (+https://sandstormdigital.com)';
 const MAX_TEXT_CHARS = 8000;
+
+// Build a dedicated dispatcher that does not reuse pooled sockets. A consistent
+// "Premature close" usually comes from undici handing back a connection the far
+// side has already closed; fresh connections per request avoid that.
+let customFetch = null;
+try {
+  const { Agent, fetch: undiciFetch } = require('undici');
+  const dispatcher = new Agent({
+    pipelining: 0,
+    keepAliveTimeout: 1,
+    keepAliveMaxTimeout: 1,
+    connect: { timeout: 30000 }
+  });
+  customFetch = (url, init) => undiciFetch(url, { ...init, dispatcher });
+} catch {
+  customFetch = null;
+}
+
+function makeClient(key, extra = {}) {
+  const opts = { apiKey: key, ...extra };
+  if (customFetch) opts.fetch = customFetch;
+  return new Anthropic(opts);
+}
 
 const SYSTEM_PROMPT = `You are an E-E-A-T claim auditor for a digital marketing agency. You read the text of a single web page and flag statements that assert something factual without backing it up, judged against Google's E-E-A-T guidelines (Experience, Expertise, Authoritativeness, Trustworthiness).
 
@@ -144,7 +168,7 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
     return { url, title, error: 'Too little readable text to audit.', claims: [] };
   }
 
-  const client = new Anthropic({ apiKey: key, maxRetries: 3, timeout: 120000 });
+  const client = makeClient(key, { maxRetries: 3, timeout: 120000 });
   const userContent = `Page URL: ${url}\nPage title: ${title}\n\nPage text:\n"""\n${text}\n"""`;
 
   let raw;
@@ -178,13 +202,48 @@ function describeError(err) {
   return parts.join(' ');
 }
 
-// Minimal, non-streaming probe so we can see the raw error if the API is
-// unreachable from this host. Used by GET /api/diag.
-async function diagnose() {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return { ok: false, stage: 'env', error: 'ANTHROPIC_API_KEY is not set.' };
+// Raw HTTPS POST using Node's native stack with a fresh, non-keepalive
+// connection. If this completes but the SDK does not, the issue is the
+// fetch/undici transport. If this also fails, the issue is the network path
+// between this host and the API.
+function rawHttpsProbe(key) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify({
+      model: MODEL,
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'Reply with the word OK.' }]
+    });
+    const req = https.request(
+      'https://api.anthropic.com/v1/messages',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'content-length': Buffer.byteLength(body),
+          connection: 'close'
+        },
+        timeout: 30000
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => { data += c; });
+        res.on('end', () =>
+          resolve({ completed: true, status: res.statusCode, bytes: data.length, sample: data.slice(0, 160) })
+        );
+        res.on('aborted', () => resolve({ completed: false, error: 'response aborted' }));
+      }
+    );
+    req.on('timeout', () => { req.destroy(); resolve({ completed: false, error: 'timeout' }); });
+    req.on('error', (e) => resolve({ completed: false, error: e.message, code: e.code }));
+    req.write(body);
+    req.end();
+  });
+}
 
-  const client = new Anthropic({ apiKey: key, maxRetries: 0, timeout: 60000 });
+async function sdkProbe(key) {
+  const client = makeClient(key, { maxRetries: 0, timeout: 60000 });
   try {
     const res = await client.messages.create({
       model: MODEL,
@@ -196,22 +255,31 @@ async function diagnose() {
       .map((b) => b.text)
       .join('')
       .trim();
-    return { ok: true, model: MODEL, reply };
+    return { ok: true, reply };
   } catch (err) {
     return {
       ok: false,
-      model: MODEL,
       error: {
         name: err.name,
         message: err.message,
         status: err.status || null,
-        code: err.code || null,
-        cause: err.cause
-          ? { name: err.cause.name, message: err.cause.message, code: err.cause.code }
-          : null
+        code: err.code || null
       }
     };
   }
+}
+
+async function diagnose() {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return { ok: false, stage: 'env', error: 'ANTHROPIC_API_KEY is not set.' };
+
+  const [raw, sdk] = await Promise.all([rawHttpsProbe(key), sdkProbe(key)]);
+  return {
+    model: MODEL,
+    usingCustomDispatcher: Boolean(customFetch),
+    rawHttps: raw,
+    sdk
+  };
 }
 
 module.exports = { auditPage, extractText, parseClaims, diagnose };
