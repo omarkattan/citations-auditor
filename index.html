@@ -110,6 +110,7 @@
 
   /* downloads */
   .downloads { display: none; align-items: center; gap: 10px; margin-bottom: 22px; }
+  #downloadsBottom { margin-top: 22px; }
   .dl-label { font-family: var(--mono); font-size: 12px; color: var(--muted);
     text-transform: uppercase; letter-spacing: .08em; margin-right: 4px; }
   .dl-btn { font-family: var(--mono); font-size: 12px; font-weight: 600; cursor: pointer;
@@ -256,6 +257,11 @@
   </div>
   <div class="index-panel" id="indexPanel"></div>
   <div id="results"></div>
+  <div class="downloads" id="downloadsBottom">
+    <span class="dl-label">Download analysis</span>
+    <button class="dl-btn" id="dlCsv2">CSV</button>
+    <button class="dl-btn" id="dlPdf2">PDF</button>
+  </div>
 
   <footer>
     Claims Auditor &mdash; Another <a href="https://sandstormdigital.com" target="_blank" rel="noopener">Sandstorm Digital</a> Production
@@ -294,6 +300,12 @@
   const results = document.getElementById('results');
   const indexPanel = document.getElementById('indexPanel');
   const downloads = document.getElementById('downloads');
+  const downloadsBottom = document.getElementById('downloadsBottom');
+  function showDownloads(show) {
+    const d = show ? 'flex' : 'none';
+    downloads.style.display = d;
+    downloadsBottom.style.display = d;
+  }
   const runBtn = document.getElementById('run');
   let pageIndex = {};
   let scanData = [];
@@ -399,7 +411,7 @@
     pageIndex = {};
     scanData = [];
     scanMeta = { url, source };
-    downloads.style.display = 'none';
+    showDownloads(false);
     runBtn.disabled = true;
     runBtn.textContent = 'Auditing...';
 
@@ -427,7 +439,7 @@
       const d = JSON.parse(e.data);
       log('> done in ' + d.durationSec + 's', 'ok');
       renderSummary(d);
-      if (scanData.length) downloads.style.display = 'flex';
+      if (scanData.length) showDownloads(true);
       if (d.balance !== undefined) setBalance(d.balance);
       es.close();
       runBtn.disabled = false;
@@ -456,7 +468,7 @@
     summary.innerHTML = '';
     indexPanel.style.display = 'none';
     indexPanel.innerHTML = '';
-    downloads.style.display = 'none';
+    showDownloads(false);
     results.innerHTML = '';
     pageIndex = {};
     scanData = [];
@@ -496,7 +508,7 @@
         highSeverity: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
         durationSec: Math.round((Date.now() - started) / 1000)
       });
-      if (scanData.length) downloads.style.display = 'flex';
+      if (scanData.length) showDownloads(true);
       if (page.balance !== undefined) setBalance(page.balance);
       log('> done', 'ok');
     } catch (err) {
@@ -601,6 +613,8 @@
 
   document.getElementById('dlCsv').addEventListener('click', exportCsv);
   document.getElementById('dlPdf').addEventListener('click', exportPdf);
+  document.getElementById('dlCsv2').addEventListener('click', exportCsv);
+  document.getElementById('dlPdf2').addEventListener('click', exportPdf);
 
   function start() {
     if (source === 'paste') runPasteAudit();
