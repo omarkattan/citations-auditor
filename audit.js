@@ -11,6 +11,20 @@ const MODEL = process.env.CLAIMS_MODEL || 'claude-sonnet-4-6';
 const USER_AGENT = 'SandstormClaimsAuditor/1.0 (+https://sandstormdigital.com)';
 const MAX_TEXT_CHARS = 8000;
 
+// Browser-like headers. Many sites return 403 to non-browser User-Agents, so we
+// present as Chrome on a normal page navigation.
+const BROWSER_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Upgrade-Insecure-Requests': '1',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1'
+};
+
 // Build a dedicated dispatcher that does not reuse pooled sockets. A consistent
 // "Premature close" usually comes from undici handing back a connection the far
 // side has already closed; fresh connections per request avoid that.
@@ -149,11 +163,17 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
   let html;
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' },
+      headers: BROWSER_HEADERS,
       signal: controller.signal,
       redirect: 'follow'
     });
-    if (!res.ok) return { url, error: `Could not fetch page (HTTP ${res.status})`, claims: [] };
+    if (!res.ok) {
+      const blocked = res.status === 403 || res.status === 401 || res.status === 429;
+      const msg = blocked
+        ? `Blocked by the site (HTTP ${res.status}), likely bot protection.`
+        : `Could not fetch page (HTTP ${res.status})`;
+      return { url, error: msg, claims: [] };
+    }
     const type = res.headers.get('content-type') || '';
     if (!type.includes('html')) return { url, error: 'Not an HTML page, skipped.', claims: [] };
     html = await res.text();
