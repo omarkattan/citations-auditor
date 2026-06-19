@@ -25,8 +25,23 @@ const BROWSER_HEADERS = {
 
 const BLOCK_STATUSES = [401, 403, 429, 503];
 
+// Markers of a page that was served but not really rendered: bot-detection
+// interstitials and "enable JavaScript" shells.
+const CHALLENGE_RE = /just a moment|checking your browser|enable javascript|please verify you are human|verifying you are human|cf-chl|cf_chl|challenge-platform|challenges\.cloudflare|datadome|captcha-delivery|px-captcha|access denied|attention required/i;
+
 function browserlessConfigured() {
   return Boolean(process.env.BROWSERLESS_TOKEN);
+}
+
+function browserlessAlways() {
+  return process.env.BROWSERLESS_ALWAYS === 'true';
+}
+
+function looksChallenged(html) {
+  if (!html) return false;
+  // A real article is large; a challenge/shell is usually tiny.
+  if (html.length < 1500) return true;
+  return CHALLENGE_RE.test(html);
 }
 
 async function fetchDirect(url, timeoutMs = 15000) {
@@ -95,11 +110,26 @@ async function fetchViaBrowserless(url, timeoutMs = 45000) {
   }
 }
 
-// Direct first; fall back to Browserless only when the site blocks us or the
-// connection fails (not for genuine 404s, which Browserless cannot fix).
+// Direct first; fall back to Browserless when the site blocks us, the
+// connection fails, or the page looks like an unrendered challenge/shell.
+// BROWSERLESS_ALWAYS=true forces every fetch through Browserless.
 async function fetchHtml(url, opts = {}) {
+  if (browserlessAlways() && browserlessConfigured()) {
+    const bl = await fetchViaBrowserless(url);
+    if (bl.ok) return bl;
+    // fall through to a direct attempt if Browserless failed
+  }
+
   const direct = await fetchDirect(url, opts.timeoutMs);
-  if (direct.ok || direct.notHtml) return direct;
+
+  if (direct.ok) {
+    if (browserlessConfigured() && !browserlessAlways() && looksChallenged(direct.html)) {
+      const bl = await fetchViaBrowserless(url);
+      if (bl.ok) return bl;
+    }
+    return direct;
+  }
+  if (direct.notHtml) return direct;
 
   const shouldFallback = direct.blocked || direct.status === null;
   if (shouldFallback && browserlessConfigured()) {
@@ -110,4 +140,4 @@ async function fetchHtml(url, opts = {}) {
   return direct;
 }
 
-module.exports = { fetchHtml, fetchViaBrowserless, browserlessConfigured, BROWSER_HEADERS };
+module.exports = { fetchHtml, fetchViaBrowserless, browserlessConfigured, browserlessAlways, looksChallenged, BROWSER_HEADERS };

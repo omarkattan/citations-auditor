@@ -158,9 +158,10 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
 
   let { title, text } = extractText(fetched.html);
 
-  // If a direct fetch returned almost no text, the page is probably rendered by
-  // JavaScript. If Browserless is configured, render it properly and retry.
-  if ((!text || text.length < 120) && fetched.via === 'direct' && browserlessConfigured()) {
+  // If a direct fetch returned little article text, the page is probably
+  // JavaScript-rendered or a shell. If Browserless is available, render it
+  // properly and retry. (A real article runs to thousands of characters.)
+  if ((!text || text.length < 600) && fetched.via === 'direct' && browserlessConfigured()) {
     const rendered = await fetchViaBrowserless(url);
     if (rendered.ok) {
       const ex = extractText(rendered.html);

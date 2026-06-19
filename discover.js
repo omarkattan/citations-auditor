@@ -5,7 +5,7 @@
 //   single - audit only the single URL entered
 
 const cheerio = require('cheerio');
-const { fetchHtml } = require('./fetchpage');
+const { fetchHtml, fetchViaBrowserless, browserlessConfigured } = require('./fetchpage');
 
 const SKIP_EXTENSIONS = [
   '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico',
@@ -32,9 +32,29 @@ function looksLikePage(url) {
   return !SKIP_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
-async function fetchText(url) {
-  const r = await fetchHtml(url);
-  return r.ok ? r.html : null;
+async function fetchPage(url) {
+  return fetchHtml(url);
+}
+
+// Pull same-origin, page-like links out of an HTML string.
+function extractLinks(html, current, origin, seen) {
+  const links = [];
+  const $ = cheerio.load(html);
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href');
+    if (!href) return;
+    let abs;
+    try {
+      abs = normalizeUrl(new URL(href, current).toString());
+    } catch {
+      return;
+    }
+    if (!abs || seen.has(abs)) return;
+    if (!abs.startsWith(origin)) return; // same origin only
+    if (!looksLikePage(abs)) return;
+    links.push(abs);
+  });
+  return links;
 }
 
 // ---- Source: crawl / folder -------------------------------------------------
@@ -54,8 +74,8 @@ async function crawlSite(startUrl, { maxPages = 15, pathPrefix = '' } = {}) {
     if (seen.has(current)) continue;
     seen.add(current);
 
-    const html = await fetchText(current);
-    if (!html) continue;
+    const r = await fetchPage(current);
+    if (!r.ok || !r.html) continue;
 
     // Only keep pages inside the requested folder, but still crawl outward
     // from the homepage so we can reach them.
@@ -66,21 +86,16 @@ async function crawlSite(startUrl, { maxPages = 15, pathPrefix = '' } = {}) {
 
     if (found.length >= maxPages) break;
 
-    const $ = cheerio.load(html);
-    $('a[href]').each((_, el) => {
-      const href = $(el).attr('href');
-      if (!href) return;
-      let abs;
-      try {
-        abs = normalizeUrl(new URL(href, current).toString());
-      } catch {
-        return;
-      }
-      if (!abs || seen.has(abs)) return;
-      if (!abs.startsWith(origin)) return; // same origin only
-      if (!looksLikePage(abs)) return;
-      queue.push(abs);
-    });
+    let links = extractLinks(r.html, current, origin, seen);
+
+    // If a directly-fetched page yields no links, it is probably a JS shell.
+    // Render it through Browserless and parse the real links.
+    if (!links.length && r.via === 'direct' && browserlessConfigured()) {
+      const rendered = await fetchViaBrowserless(current);
+      if (rendered.ok) links = extractLinks(rendered.html, current, origin, seen);
+    }
+
+    links.forEach((abs) => queue.push(abs));
   }
 
   return found.slice(0, maxPages);
