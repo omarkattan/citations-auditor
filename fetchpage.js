@@ -140,4 +140,33 @@ async function fetchHtml(url, opts = {}) {
   return direct;
 }
 
-module.exports = { fetchHtml, fetchViaBrowserless, browserlessConfigured, browserlessAlways, looksChallenged, BROWSER_HEADERS };
+// Diagnostic: reports how a URL is fetched (direct vs Browserless), statuses,
+// sizes, and whether the page looks challenged. For troubleshooting blocks.
+async function fetchDiagnostic(url) {
+  const direct = await fetchDirect(url);
+  const out = {
+    url,
+    browserlessConfigured: browserlessConfigured(),
+    browserlessAlways: browserlessAlways(),
+    direct: {
+      ok: direct.ok,
+      status: direct.status,
+      blocked: Boolean(direct.blocked),
+      notHtml: Boolean(direct.notHtml),
+      htmlLen: direct.html ? direct.html.length : 0,
+      challenged: looksChallenged(direct.html)
+    }
+  };
+  if (browserlessConfigured()) {
+    const bl = await fetchViaBrowserless(url);
+    out.browserless = {
+      ok: bl.ok,
+      status: bl.status,
+      error: bl.error || null,
+      htmlLen: bl.html ? bl.html.length : 0
+    };
+  }
+  return out;
+}
+
+module.exports = { fetchHtml, fetchViaBrowserless, fetchDiagnostic, browserlessConfigured, browserlessAlways, looksChallenged, BROWSER_HEADERS };

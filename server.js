@@ -2,7 +2,8 @@
 const express = require('express');
 const path = require('path');
 const { discover } = require('./discover');
-const { auditPage, auditText, diagnose } = require('./audit');
+const { auditPage, auditText, diagnose, extractText } = require('./audit');
+const { fetchHtml, fetchDiagnostic } = require('./fetchpage');
 const { logScan, getScans, logPages, getPages, ensureTabs, storageMode } = require('./sheets');
 const db = require('./db');
 const payments = require('./payments');
@@ -145,6 +146,30 @@ app.get('/api/diag', async (req, res) => {
   const result = await diagnose();
   result.node = process.version;
   res.json(result);
+});
+
+// Fetch diagnostic: shows how a given URL is retrieved (direct vs Browserless)
+// and how much real text comes out. Guarded by the admin key.
+app.get('/api/fetch-test', async (req, res) => {
+  if (req.query.key !== ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  const url = (req.query.url || '').trim();
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Provide ?url=https://...' });
+
+  const diag = await fetchDiagnostic(url);
+  const fetched = await fetchHtml(url);
+  if (fetched.ok) {
+    const ex = extractText(fetched.html);
+    diag.pipeline = {
+      via: fetched.via,
+      htmlLen: fetched.html.length,
+      title: ex.title,
+      textLen: ex.text.length,
+      sample: ex.text.slice(0, 300)
+    };
+  } else {
+    diag.pipeline = { via: 'none', error: fetched.error || 'fetch failed', status: fetched.status };
+  }
+  res.json(diag);
 });
 
 // ---- Streaming scan (Server-Sent Events) -----------------------------------
