@@ -1,14 +1,22 @@
-// lib/sheets.js
-// Logs each scan to a Google Sheet and reads them back for the admin view.
-// Reuses GOOGLE_SHEET_ID and GOOGLE_SERVICE_ACCOUNT, the same pattern as
-// the agentic readiness tester. If those are not set, logging is skipped
-// silently so the app still runs.
+// sheets.js
+// Stores scan logs and serves them to the admin view.
+//
+// Two backends, chosen automatically:
+//   - Google Sheets, if GOOGLE_SHEET_ID and GOOGLE_SERVICE_ACCOUNT are set
+//     (durable, survives redeploys).
+//   - A local JSON file otherwise (zero setup, but on a free host it resets
+//     on every redeploy and cold-start restart).
 
 const { google } = require('googleapis');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const HEADER = [
   'Timestamp', 'URL', 'Source', 'Pages scanned', 'Claims found', 'High severity', 'Duration (s)'
 ];
+
+// ---- Google Sheets backend --------------------------------------------------
 
 function getClient() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT;
@@ -23,13 +31,45 @@ function getClient() {
   return { sheets: google.sheets({ version: 'v4', auth }), sheetId };
 }
 
-async function logScan(record) {
-  const client = getClient();
-  if (!client) return;
-  const { sheets, sheetId } = client;
+function storageMode() {
+  return getClient() ? 'sheet' : 'file';
+}
 
+// ---- Local file backend -----------------------------------------------------
+
+function storePath() {
+  const dir = process.env.DATA_DIR || path.join(__dirname, 'data');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, 'claims-log.json');
+  } catch {
+    return path.join(os.tmpdir(), 'claims-log.json');
+  }
+}
+const STORE = storePath();
+
+function readStore() {
+  try {
+    return JSON.parse(fs.readFileSync(STORE, 'utf8'));
+  } catch {
+    return { scans: [], pages: [] };
+  }
+}
+
+function writeStore(data) {
+  try {
+    fs.writeFileSync(STORE, JSON.stringify(data));
+  } catch (err) {
+    console.error('Local log write failed:', err.message);
+  }
+}
+
+// ---- Public API -------------------------------------------------------------
+
+async function logScan(record) {
+  const ts = new Date().toISOString();
   const row = [
-    new Date().toISOString(),
+    ts,
     record.url || '',
     record.source || '',
     record.pagesScanned || 0,
@@ -38,9 +78,16 @@ async function logScan(record) {
     record.durationSec || 0
   ];
 
+  const client = getClient();
+  if (!client) {
+    const store = readStore();
+    store.scans.push(row);
+    writeStore(store);
+    return;
+  }
   try {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: sheetId,
+    await client.sheets.spreadsheets.values.append({
+      spreadsheetId: client.sheetId,
       range: 'Scans!A:G',
       valueInputOption: 'RAW',
       requestBody: { values: [row] }
@@ -52,36 +99,40 @@ async function logScan(record) {
 
 async function getScans() {
   const client = getClient();
-  if (!client) return { configured: false, rows: [] };
-  const { sheets, sheetId } = client;
-
+  if (!client) {
+    const store = readStore();
+    return { configured: true, mode: 'file', rows: (store.scans || []).slice().reverse() };
+  }
   try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: sheetId,
+    const res = await client.sheets.spreadsheets.values.get({
+      spreadsheetId: client.sheetId,
       range: 'Scans!A:G'
     });
     const values = res.data.values || [];
     const rows = values.length && values[0][0] === 'Timestamp' ? values.slice(1) : values;
-    return { configured: true, rows: rows.reverse() };
+    return { configured: true, mode: 'sheet', rows: rows.reverse() };
   } catch (err) {
-    return { configured: true, rows: [], error: err.message };
+    return { configured: true, mode: 'sheet', rows: [], error: err.message };
   }
 }
 
-// Per-page log: one row per individual URL audited, batched into a single
-// append call per scan. Tab columns: Timestamp, Page URL, Source, Claims,
-// High severity, From (the root URL or label of the scan).
+// Per-page log: one row per individual URL audited.
+// Row shape: [Timestamp, Page URL, Source, Claims, High severity, From].
 async function logPages(rows) {
-  const client = getClient();
-  if (!client || !rows || !rows.length) return;
-  const { sheets, sheetId } = client;
-
+  if (!rows || !rows.length) return;
   const ts = new Date().toISOString();
   const values = rows.map((r) => [ts, r.pageUrl || '', r.source || '', r.claims || 0, r.high || 0, r.root || '']);
 
+  const client = getClient();
+  if (!client) {
+    const store = readStore();
+    store.pages.push(...values);
+    writeStore(store);
+    return;
+  }
   try {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: sheetId,
+    await client.sheets.spreadsheets.values.append({
+      spreadsheetId: client.sheetId,
       range: 'Pages!A:F',
       valueInputOption: 'RAW',
       requestBody: { values }
@@ -93,35 +144,34 @@ async function logPages(rows) {
 
 async function getPages() {
   const client = getClient();
-  if (!client) return { configured: false, rows: [] };
-  const { sheets, sheetId } = client;
-
+  if (!client) {
+    const store = readStore();
+    return { configured: true, mode: 'file', rows: (store.pages || []).slice().reverse() };
+  }
   try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: sheetId,
+    const res = await client.sheets.spreadsheets.values.get({
+      spreadsheetId: client.sheetId,
       range: 'Pages!A:F'
     });
     const values = res.data.values || [];
     const rows = values.length && values[0][0] === 'Timestamp' ? values.slice(1) : values;
-    return { configured: true, rows: rows.reverse() };
+    return { configured: true, mode: 'sheet', rows: rows.reverse() };
   } catch (err) {
-    return { configured: true, rows: [], error: err.message };
+    return { configured: true, mode: 'sheet', rows: [], error: err.message };
   }
 }
 
-// Best-effort: make sure the Scans and Pages tabs exist so logging never fails
-// on a fresh sheet. Called once at startup.
+// Make sure the Scans and Pages tabs exist when using Sheets. No-op for files.
 async function ensureTabs() {
   const client = getClient();
   if (!client) return;
-  const { sheets, sheetId } = client;
   try {
-    const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId });
+    const meta = await client.sheets.spreadsheets.get({ spreadsheetId: client.sheetId });
     const titles = (meta.data.sheets || []).map((s) => s.properties.title);
     const missing = ['Scans', 'Pages'].filter((t) => !titles.includes(t));
     if (missing.length) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: sheetId,
+      await client.sheets.spreadsheets.batchUpdate({
+        spreadsheetId: client.sheetId,
         requestBody: { requests: missing.map((title) => ({ addSheet: { properties: { title } } })) }
       });
     }
@@ -130,4 +180,4 @@ async function ensureTabs() {
   }
 }
 
-module.exports = { logScan, getScans, logPages, getPages, ensureTabs, HEADER };
+module.exports = { logScan, getScans, logPages, getPages, ensureTabs, storageMode, HEADER };

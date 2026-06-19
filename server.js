@@ -3,7 +3,7 @@ const express = require('express');
 const path = require('path');
 const { discover } = require('./discover');
 const { auditPage, auditText, diagnose } = require('./audit');
-const { logScan, getScans, logPages, getPages, ensureTabs } = require('./sheets');
+const { logScan, getScans, logPages, getPages, ensureTabs, storageMode } = require('./sheets');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -189,11 +189,16 @@ app.get('/admin/scans', async (req, res) => {
       </table>`;
 
   const total = (pagesLog.rows || []).length;
+  const mode = storageMode();
+  const storageNote = mode === 'sheet'
+    ? 'Storage: Google Sheet (durable).'
+    : 'Storage: local file. Resets on redeploy and cold-start. Set GOOGLE_SHEET_ID and GOOGLE_SERVICE_ACCOUNT for durable history.';
   const body = `
     <div class="bar">
       <h1>Tested URLs (${total})</h1>
       <a class="dl" href="/admin/urls.csv?key=${encodeURIComponent(req.query.key)}">Download CSV</a>
     </div>
+    <p class="note">${escHtml(storageNote)}</p>
     ${urlsTable}
     <h1 style="margin-top:40px">Scans</h1>
     ${scansTable}`;
@@ -227,6 +232,7 @@ function adminShell(body) {
       th, td { text-align:left; padding:7px 10px; border-bottom:1px solid #1e2421; vertical-align:top; }
       th { color:#2ecc71; text-transform:uppercase; font-size:10px; letter-spacing:.08em; }
       td.u { max-width:520px; word-break:break-all; }
+      .note { color:#8a948e; font-size:11px; margin:10px 0 0; }
       a { color:#9fe6bd; text-decoration:none; }
       a:hover { color:#2ecc71; }
     </style></head><body>${body}</body></html>`;
