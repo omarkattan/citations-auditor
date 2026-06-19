@@ -68,4 +68,66 @@ async function getScans() {
   }
 }
 
-module.exports = { logScan, getScans, HEADER };
+// Per-page log: one row per individual URL audited, batched into a single
+// append call per scan. Tab columns: Timestamp, Page URL, Source, Claims,
+// High severity, From (the root URL or label of the scan).
+async function logPages(rows) {
+  const client = getClient();
+  if (!client || !rows || !rows.length) return;
+  const { sheets, sheetId } = client;
+
+  const ts = new Date().toISOString();
+  const values = rows.map((r) => [ts, r.pageUrl || '', r.source || '', r.claims || 0, r.high || 0, r.root || '']);
+
+  try {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: sheetId,
+      range: 'Pages!A:F',
+      valueInputOption: 'RAW',
+      requestBody: { values }
+    });
+  } catch (err) {
+    console.error('Pages log failed:', err.message);
+  }
+}
+
+async function getPages() {
+  const client = getClient();
+  if (!client) return { configured: false, rows: [] };
+  const { sheets, sheetId } = client;
+
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: 'Pages!A:F'
+    });
+    const values = res.data.values || [];
+    const rows = values.length && values[0][0] === 'Timestamp' ? values.slice(1) : values;
+    return { configured: true, rows: rows.reverse() };
+  } catch (err) {
+    return { configured: true, rows: [], error: err.message };
+  }
+}
+
+// Best-effort: make sure the Scans and Pages tabs exist so logging never fails
+// on a fresh sheet. Called once at startup.
+async function ensureTabs() {
+  const client = getClient();
+  if (!client) return;
+  const { sheets, sheetId } = client;
+  try {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId });
+    const titles = (meta.data.sheets || []).map((s) => s.properties.title);
+    const missing = ['Scans', 'Pages'].filter((t) => !titles.includes(t));
+    if (missing.length) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: sheetId,
+        requestBody: { requests: missing.map((title) => ({ addSheet: { properties: { title } } })) }
+      });
+    }
+  } catch (err) {
+    console.error('ensureTabs failed:', err.message);
+  }
+}
+
+module.exports = { logScan, getScans, logPages, getPages, ensureTabs, HEADER };

@@ -3,7 +3,7 @@ const express = require('express');
 const path = require('path');
 const { discover } = require('./discover');
 const { auditPage, auditText, diagnose } = require('./audit');
-const { logScan, getScans } = require('./sheets');
+const { logScan, getScans, logPages, getPages, ensureTabs } = require('./sheets');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,6 +36,13 @@ app.post('/api/audit-text', async (req, res) => {
       highSeverity: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
       durationSec: Math.round((Date.now() - started) / 1000)
     });
+    await logPages([{
+      pageUrl: label,
+      source: 'paste',
+      claims: claims.length,
+      high: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
+      root: label
+    }]);
     res.json(result);
   } catch (err) {
     res.status(500).json({ url: label, error: `Audit failed: ${err.message}`, claims: [] });
@@ -95,6 +102,7 @@ app.get('/api/scan/stream', async (req, res) => {
 
     let totalClaims = 0;
     let highSeverity = 0;
+    const pageRows = [];
 
     for (let i = 0; i < pages.length; i++) {
       if (closed) break;
@@ -103,8 +111,10 @@ app.get('/api/scan/stream', async (req, res) => {
 
       const result = await auditPage(pageUrl, { findSources });
       const claims = result.claims || [];
+      const high = claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length;
       totalClaims += claims.length;
-      highSeverity += claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length;
+      highSeverity += high;
+      pageRows.push({ pageUrl: result.url, source, claims: claims.length, high, root: url });
 
       send('page', result);
     }
@@ -118,6 +128,7 @@ app.get('/api/scan/stream', async (req, res) => {
       highSeverity,
       durationSec
     });
+    await logPages(pageRows);
 
     send('done', { pagesScanned: pages.length, totalClaims, highSeverity, durationSec });
   } catch (err) {
@@ -129,40 +140,99 @@ app.get('/api/scan/stream', async (req, res) => {
 
 // ---- Admin view -------------------------------------------------------------
 
+function escHtml(v) {
+  return (v == null ? '' : v.toString()).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+}
+
 app.get('/admin/scans', async (req, res) => {
   if (req.query.key !== ADMIN_KEY) {
     return res.status(401).send('Unauthorized');
   }
-  const { configured, rows, error } = await getScans();
 
-  const body = !configured
-    ? '<p>Logging is not configured. Set GOOGLE_SHEET_ID and GOOGLE_SERVICE_ACCOUNT.</p>'
-    : error
-    ? `<p>Could not read the sheet: ${error}</p>`
+  const [scans, pagesLog] = await Promise.all([getScans(), getPages()]);
+
+  if (!scans.configured) {
+    return res.send(adminShell('<p>Logging is not configured. Set GOOGLE_SHEET_ID and GOOGLE_SERVICE_ACCOUNT.</p>'));
+  }
+
+  const urlRows = (pagesLog.rows || [])
+    .map((r) => {
+      const link = r[1] ? `<a href="${escHtml(r[1])}" target="_blank" rel="noopener">${escHtml(r[1])}</a>` : '';
+      return `<tr>
+        <td>${escHtml(r[0])}</td>
+        <td class="u">${link}</td>
+        <td>${escHtml(r[2])}</td>
+        <td>${escHtml(r[3])}</td>
+        <td>${escHtml(r[4])}</td>
+        <td>${escHtml(r[5])}</td>
+      </tr>`;
+    })
+    .join('');
+
+  const urlsTable = pagesLog.error
+    ? `<p>Could not read the Pages tab: ${escHtml(pagesLog.error)}</p>`
+    : urlRows
+    ? `<table>
+        <thead><tr><th>Time</th><th>Tested URL</th><th>Source</th><th>Claims</th><th>High</th><th>From</th></tr></thead>
+        <tbody>${urlRows}</tbody>
+      </table>`
+    : '<p>No URLs tested yet.</p>';
+
+  const scanRows = (scans.rows || [])
+    .map((r) => `<tr>${[0, 1, 2, 3, 4, 5, 6].map((i) => `<td>${escHtml(r[i])}</td>`).join('')}</tr>`)
+    .join('');
+  const scansTable = scans.error
+    ? `<p>Could not read the Scans tab: ${escHtml(scans.error)}</p>`
     : `<table>
-        <thead><tr>
-          <th>Time</th><th>URL</th><th>Source</th><th>Pages</th><th>Claims</th><th>High</th><th>Secs</th>
-        </tr></thead>
-        <tbody>${rows
-          .map(
-            (r) => `<tr>${[0, 1, 2, 3, 4, 5, 6]
-              .map((i) => `<td>${(r[i] || '').toString().replace(/</g, '&lt;')}</td>`)
-              .join('')}</tr>`
-          )
-          .join('')}</tbody>
+        <thead><tr><th>Time</th><th>URL</th><th>Source</th><th>Pages</th><th>Claims</th><th>High</th><th>Secs</th></tr></thead>
+        <tbody>${scanRows}</tbody>
       </table>`;
 
-  res.send(`<!doctype html><html><head><meta charset="utf-8">
-    <title>Scans - Claims Auditor</title>
-    <style>
-      body { background:#0d0f0e; color:#e6e6e6; font-family:'JetBrains Mono',ui-monospace,monospace; padding:32px; }
-      h1 { color:#2ecc71; font-size:18px; letter-spacing:.04em; }
-      table { width:100%; border-collapse:collapse; margin-top:16px; font-size:13px; }
-      th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #1e2421; }
-      th { color:#2ecc71; text-transform:uppercase; font-size:11px; letter-spacing:.08em; }
-      td:nth-child(2) { color:#9fe6bd; max-width:360px; overflow:hidden; text-overflow:ellipsis; }
-    </style></head>
-    <body><h1>Scan log</h1>${body}</body></html>`);
+  const total = (pagesLog.rows || []).length;
+  const body = `
+    <div class="bar">
+      <h1>Tested URLs (${total})</h1>
+      <a class="dl" href="/admin/urls.csv?key=${encodeURIComponent(req.query.key)}">Download CSV</a>
+    </div>
+    ${urlsTable}
+    <h1 style="margin-top:40px">Scans</h1>
+    ${scansTable}`;
+
+  res.send(adminShell(body));
 });
 
-app.listen(PORT, () => console.log(`Claims Auditor listening on ${PORT}`));
+// CSV of every tested URL, for the admin.
+app.get('/admin/urls.csv', async (req, res) => {
+  if (req.query.key !== ADMIN_KEY) return res.status(401).send('Unauthorized');
+  const { rows } = await getPages();
+  const header = ['Timestamp', 'Tested URL', 'Source', 'Claims', 'High severity', 'From'];
+  const csv = [header]
+    .concat(rows || [])
+    .map((r) => r.map((c) => `"${(c == null ? '' : c.toString()).replace(/"/g, '""')}"`).join(','))
+    .join('\r\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="tested-urls.csv"');
+  res.send(csv);
+});
+
+function adminShell(body) {
+  return `<!doctype html><html><head><meta charset="utf-8">
+    <title>Admin - Claims Auditor</title>
+    <style>
+      body { background:#0d0f0e; color:#e6e6e6; font-family:'JetBrains Mono',ui-monospace,monospace; padding:32px; }
+      h1 { color:#2ecc71; font-size:16px; letter-spacing:.04em; margin:0; }
+      .bar { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+      .dl { color:#06150c; background:#2ecc71; padding:8px 14px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:700; }
+      table { width:100%; border-collapse:collapse; margin-top:16px; font-size:12px; }
+      th, td { text-align:left; padding:7px 10px; border-bottom:1px solid #1e2421; vertical-align:top; }
+      th { color:#2ecc71; text-transform:uppercase; font-size:10px; letter-spacing:.08em; }
+      td.u { max-width:520px; word-break:break-all; }
+      a { color:#9fe6bd; text-decoration:none; }
+      a:hover { color:#2ecc71; }
+    </style></head><body>${body}</body></html>`;
+}
+
+app.listen(PORT, () => {
+  console.log(`Claims Auditor listening on ${PORT}`);
+  ensureTabs();
+});

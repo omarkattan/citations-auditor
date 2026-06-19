@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root {
     --bg: #0b0d0c;
@@ -106,6 +107,15 @@
   .stat .n { font-family: var(--mono); font-size: 26px; font-weight: 700; }
   .stat .l { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
   .stat.high .n { color: var(--high); }
+
+  /* downloads */
+  .downloads { display: none; align-items: center; gap: 10px; margin-bottom: 22px; }
+  .dl-label { font-family: var(--mono); font-size: 12px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .08em; margin-right: 4px; }
+  .dl-btn { font-family: var(--mono); font-size: 12px; font-weight: 600; cursor: pointer;
+    color: var(--green); background: var(--panel-2); border: 1px solid var(--green-dim);
+    padding: 7px 14px; border-radius: 6px; }
+  .dl-btn:hover { background: var(--green); color: #06150c; }
 
   /* pages tested index */
   .index-panel { display: none; border: 1px solid var(--line); border-radius: 10px;
@@ -207,6 +217,11 @@
 
   <div class="term" id="term"></div>
   <div class="summary" id="summary"></div>
+  <div class="downloads" id="downloads">
+    <span class="dl-label">Download analysis</span>
+    <button class="dl-btn" id="dlCsv">CSV</button>
+    <button class="dl-btn" id="dlPdf">PDF</button>
+  </div>
   <div class="index-panel" id="indexPanel"></div>
   <div id="results"></div>
 
@@ -246,8 +261,11 @@
   const summary = document.getElementById('summary');
   const results = document.getElementById('results');
   const indexPanel = document.getElementById('indexPanel');
+  const downloads = document.getElementById('downloads');
   const runBtn = document.getElementById('run');
   let pageIndex = {};
+  let scanData = [];
+  let scanMeta = {};
 
   function log(text, cls = '') {
     const ln = document.createElement('div');
@@ -347,6 +365,9 @@
     indexPanel.innerHTML = '';
     results.innerHTML = '';
     pageIndex = {};
+    scanData = [];
+    scanMeta = { url, source };
+    downloads.style.display = 'none';
     runBtn.disabled = true;
     runBtn.textContent = 'Auditing...';
 
@@ -365,6 +386,7 @@
       const page = JSON.parse(e.data);
       const n = (page.claims || []).length;
       log('  ' + (page.error ? '! ' : (n ? '? ' : 'ok ')) + page.url + (page.error ? ' (' + page.error + ')' : ' (' + n + ' claim' + (n === 1 ? '' : 's') + ')'), page.error ? 'err' : (n ? '' : 'ok'));
+      scanData.push(page);
       updateIndex(page);
       renderPage(page);
     });
@@ -372,6 +394,7 @@
       const d = JSON.parse(e.data);
       log('> done in ' + d.durationSec + 's', 'ok');
       renderSummary(d);
+      if (scanData.length) downloads.style.display = 'flex';
       es.close();
       runBtn.disabled = false;
       runBtn.textContent = 'Run audit';
@@ -397,8 +420,11 @@
     summary.innerHTML = '';
     indexPanel.style.display = 'none';
     indexPanel.innerHTML = '';
+    downloads.style.display = 'none';
     results.innerHTML = '';
     pageIndex = {};
+    scanData = [];
+    scanMeta = { url, source: 'paste' };
     runBtn.disabled = true;
     runBtn.textContent = 'Auditing...';
 
@@ -419,6 +445,7 @@
       log('  ' + (page.error ? '! ' : (claims.length ? '? ' : 'ok ')) + page.url +
         (page.error ? ' (' + page.error + ')' : ' (' + claims.length + ' claim' + (claims.length === 1 ? '' : 's') + ')'),
         page.error ? 'err' : (claims.length ? '' : 'ok'));
+      scanData.push(page);
       renderIndex([page.url]);
       updateIndex(page);
       renderPage(page);
@@ -428,6 +455,7 @@
         highSeverity: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
         durationSec: Math.round((Date.now() - started) / 1000)
       });
+      if (scanData.length) downloads.style.display = 'flex';
       log('> done', 'ok');
     } catch (err) {
       log('> error: ' + err.message, 'err');
@@ -436,6 +464,101 @@
       runBtn.textContent = 'Run audit';
     }
   }
+
+  function claimRows() {
+    const rows = [];
+    scanData.forEach((p) => (p.claims || []).forEach((c) => rows.push([
+      p.url || '',
+      p.title || '',
+      c.severity || '',
+      c.claim_type || '',
+      c.eeat || '',
+      c.claim || '',
+      c.context || '',
+      c.issue || '',
+      c.recommendation || '',
+      (c.suggested_source && c.suggested_source.title) || '',
+      (c.suggested_source && c.suggested_source.url) || ''
+    ])));
+    return rows;
+  }
+
+  function fileBase() {
+    let host = 'audit';
+    try { host = new URL(scanMeta.url).hostname.replace(/^www\./, ''); } catch {}
+    return 'claims-audit-' + host + '-' + new Date().toISOString().slice(0, 10);
+  }
+
+  function downloadBlob(content, filename, type) {
+    const blob = new Blob([content], { type });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function exportCsv() {
+    const header = ['Page URL', 'Page title', 'Severity', 'Type', 'E-E-A-T', 'Claim', 'Context', 'Issue', 'Recommendation', 'Suggested source', 'Source URL'];
+    const cell = (c) => '"' + (c == null ? '' : String(c)).replace(/"/g, '""') + '"';
+    const csv = [header].concat(claimRows()).map((r) => r.map(cell).join(',')).join('\r\n');
+    downloadBlob('\ufeff' + csv, fileBase() + '.csv', 'text/csv;charset=utf-8');
+  }
+
+  function exportPdf() {
+    const jsPDFCtor = window.jspdf && window.jspdf.jsPDF;
+    if (!jsPDFCtor) { alert('PDF tool did not load. Check your connection and try again.'); return; }
+    const doc = new jsPDFCtor({ unit: 'pt', format: 'a4' });
+    const margin = 40;
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const width = pageW - margin * 2;
+    let y = margin;
+
+    function line(text, size, rgb, gap) {
+      doc.setFontSize(size);
+      const c = rgb || [20, 20, 20];
+      doc.setTextColor(c[0], c[1], c[2]);
+      doc.splitTextToSize(String(text), width).forEach((t) => {
+        if (y > pageH - margin) { doc.addPage(); y = margin; }
+        doc.text(t, margin, y);
+        y += size * 1.35;
+      });
+      y += gap || 0;
+    }
+
+    const rows = claimRows();
+    line('Claims Auditor report', 18, [10, 122, 63], 4);
+    line(scanMeta.url || 'Pasted text', 10, [110, 110, 110], 2);
+    line(scanData.length + ' page(s) audited, ' + rows.length + ' claim(s) flagged', 10, [110, 110, 110], 4);
+    line(new Date().toLocaleString(), 9, [150, 150, 150], 12);
+
+    scanData.forEach((p) => {
+      if (y > pageH - margin - 40) { doc.addPage(); y = margin; }
+      line(p.url, 11, [10, 122, 63], 2);
+      const claims = p.claims || [];
+      if (!claims.length) {
+        line(p.error ? 'Note: ' + p.error : 'No unsubstantiated claims found.', 9, [120, 120, 120], 10);
+        return;
+      }
+      claims.forEach((c, i) => {
+        line((i + 1) + '. [' + (c.severity || '').toUpperCase() + '] ' + (c.claim || ''), 10, [20, 20, 20], 1);
+        line('Pillar: ' + (c.eeat || '-') + '   Type: ' + (c.claim_type || '-'), 8, [120, 120, 120], 1);
+        if (c.issue) line('Issue: ' + c.issue, 9, [70, 70, 70], 1);
+        if (c.recommendation) line('Fix: ' + c.recommendation, 9, [70, 70, 70], 1);
+        const src = c.suggested_source && c.suggested_source.url;
+        line(src ? 'Source: ' + c.suggested_source.url : 'Source: none found yet', 8, [10, 122, 63], 6);
+      });
+      y += 6;
+    });
+
+    doc.save(fileBase() + '.pdf');
+  }
+
+  document.getElementById('dlCsv').addEventListener('click', exportCsv);
+  document.getElementById('dlPdf').addEventListener('click', exportPdf);
 
   function start() {
     if (source === 'paste') runPasteAudit();
