@@ -24,6 +24,13 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     const event = payments.verifyWebhook(req.body, req.headers['stripe-signature']);
     if (event.type === 'checkout.session.completed') {
       await payments.fulfillSession(event.data.object.id);
+    } else if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
+      const obj = event.data.object || {};
+      const pi = typeof obj.payment_intent === 'string' ? obj.payment_intent : (obj.payment_intent && obj.payment_intent.id) || null;
+      if (pi) {
+        const voided = await payments.voidByPaymentIntent(pi);
+        if (voided.length) console.log(`[webhook] ${event.type}: voided code(s)`, voided.map((v) => v.code).join(', '));
+      }
     }
     res.json({ received: true });
   } catch (err) {
