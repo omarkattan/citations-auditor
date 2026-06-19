@@ -83,7 +83,7 @@ async function fetchViaBrowserless(url, timeoutMs = 45000) {
         signal: controller.signal
       });
       if (!res.ok) return { ok: false, status: res.status, html: null, via: 'browserless', error: `browserless /content ${res.status}` };
-      return { ok: true, status: 200, html: await res.text(), via: 'browserless', error: null };
+      return finalizeBrowserless(await res.text());
     }
 
     // Default: /unblock, designed to bypass bot detection.
@@ -100,14 +100,22 @@ async function fetchViaBrowserless(url, timeoutMs = 45000) {
     });
     if (!res.ok) return { ok: false, status: res.status, html: null, via: 'browserless', error: `browserless /unblock ${res.status}` };
     const data = await res.json();
-    const html = data.content || data.html || '';
-    if (!html) return { ok: false, status: 200, html: null, via: 'browserless', error: 'browserless returned no content' };
-    return { ok: true, status: 200, html, via: 'browserless', error: null };
+    return finalizeBrowserless(data.content || data.html || '');
   } catch (err) {
     return { ok: false, status: null, html: null, via: 'browserless', error: err.message };
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Treat a returned bot-detection page as a failure, not as real content, so the
+// auditor reports "still blocked" instead of analyzing the interstitial.
+function finalizeBrowserless(html) {
+  if (!html) return { ok: false, status: 200, html: null, via: 'browserless', error: 'browserless returned no content' };
+  if (looksChallenged(html) || /just a moment|security verification|performing security|ray id/i.test(html.slice(0, 4000))) {
+    return { ok: false, status: 200, html: null, via: 'browserless', error: 'browserless got a challenge page (enable residential proxy)' };
+  }
+  return { ok: true, status: 200, html, via: 'browserless', error: null };
 }
 
 // Direct first; fall back to Browserless when the site blocks us, the
