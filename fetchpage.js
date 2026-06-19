@@ -65,49 +65,67 @@ async function fetchDirect(url, timeoutMs = 15000) {
   }
 }
 
-async function fetchViaBrowserless(url, timeoutMs) {
+function browserlessConfig() {
+  return {
+    base: (process.env.BROWSERLESS_URL || 'https://production-sfo.browserless.io').replace(/\/$/, ''),
+    mode: (process.env.BROWSERLESS_MODE || 'unblock').toLowerCase(),
+    proxy: process.env.BROWSERLESS_PROXY || null,
+    proxyCountry: process.env.BROWSERLESS_PROXY_COUNTRY || null,
+    timeoutMs: parseInt(process.env.BROWSERLESS_TIMEOUT_MS || '90000', 10),
+    alwaysOn: browserlessAlways()
+  };
+}
+
+// Raw Browserless call with no challenge filtering. Returns the actual response
+// so callers (and the diagnostic) can see exactly what came back.
+async function browserlessRaw(url, timeoutMs) {
   const token = process.env.BROWSERLESS_TOKEN;
-  if (!token) return { ok: false, status: null, html: null, via: 'browserless', error: 'BROWSERLESS_TOKEN not set' };
+  if (!token) return { status: null, html: null, error: 'BROWSERLESS_TOKEN not set' };
 
-  const base = (process.env.BROWSERLESS_URL || 'https://production-sfo.browserless.io').replace(/\/$/, '');
-  const mode = (process.env.BROWSERLESS_MODE || 'unblock').toLowerCase();
-  // Residential-proxy unblocking can take a while; default to 90s.
-  const t = timeoutMs || parseInt(process.env.BROWSERLESS_TIMEOUT_MS || '90000', 10);
-
+  const cfg = browserlessConfig();
+  const t = timeoutMs || cfg.timeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), t);
   try {
-    if (mode === 'content') {
-      const res = await fetch(`${base}/content?token=${encodeURIComponent(token)}`, {
+    if (cfg.mode === 'content') {
+      const res = await fetch(`${cfg.base}/content?token=${encodeURIComponent(token)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, gotoOptions: { waitUntil: 'networkidle2' } }),
         signal: controller.signal
       });
-      if (!res.ok) return { ok: false, status: res.status, html: null, via: 'browserless', error: `browserless /content ${res.status}` };
-      return finalizeBrowserless(await res.text());
+      if (!res.ok) return { status: res.status, html: null, error: `browserless /content ${res.status}` };
+      return { status: 200, html: await res.text(), error: null };
     }
 
-    // Default: /unblock, designed to bypass bot detection.
     const qs = new URLSearchParams({ token });
-    if (process.env.BROWSERLESS_PROXY) {
-      qs.set('proxy', process.env.BROWSERLESS_PROXY);
-      if (process.env.BROWSERLESS_PROXY_COUNTRY) qs.set('proxyCountry', process.env.BROWSERLESS_PROXY_COUNTRY);
+    if (cfg.proxy) {
+      qs.set('proxy', cfg.proxy);
+      if (cfg.proxyCountry) qs.set('proxyCountry', cfg.proxyCountry);
     }
-    const res = await fetch(`${base}/unblock?${qs.toString()}`, {
+    const res = await fetch(`${cfg.base}/unblock?${qs.toString()}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, content: true, cookies: false, screenshot: false, browserWSEndpoint: false }),
       signal: controller.signal
     });
-    if (!res.ok) return { ok: false, status: res.status, html: null, via: 'browserless', error: `browserless /unblock ${res.status}` };
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return { status: res.status, html: null, error: `browserless /unblock ${res.status}: ${body.slice(0, 200)}` };
+    }
     const data = await res.json();
-    return finalizeBrowserless(data.content || data.html || '');
+    return { status: 200, html: data.content || data.html || '', error: null };
   } catch (err) {
-    return { ok: false, status: null, html: null, via: 'browserless', error: err.message };
+    return { status: null, html: null, error: err.message };
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchViaBrowserless(url, timeoutMs) {
+  const r = await browserlessRaw(url, timeoutMs);
+  if (r.error) return { ok: false, status: r.status, html: null, via: 'browserless', error: r.error };
+  return finalizeBrowserless(r.html);
 }
 
 // Treat a returned bot-detection page as a failure, not as real content, so the
@@ -158,6 +176,7 @@ async function fetchDiagnostic(url) {
     url,
     browserlessConfigured: browserlessConfigured(),
     browserlessAlways: browserlessAlways(),
+    config: browserlessConfig(),
     direct: {
       ok: direct.ok,
       status: direct.status,
@@ -168,12 +187,13 @@ async function fetchDiagnostic(url) {
     }
   };
   if (browserlessConfigured()) {
-    const bl = await fetchViaBrowserless(url);
+    const raw = await browserlessRaw(url);
     out.browserless = {
-      ok: bl.ok,
-      status: bl.status,
-      error: bl.error || null,
-      htmlLen: bl.html ? bl.html.length : 0
+      status: raw.status,
+      error: raw.error || null,
+      htmlLen: raw.html ? raw.html.length : 0,
+      challenged: looksChallenged(raw.html || ''),
+      sample: (raw.html || '').replace(/\s+/g, ' ').slice(0, 200)
     };
   }
   return out;
