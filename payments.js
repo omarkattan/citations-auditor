@@ -32,6 +32,7 @@ async function createCheckout(packageId, origin) {
   const pkg = PACKAGES[packageId];
   if (!pkg) throw new Error('Unknown package.');
 
+  const descriptor = (process.env.STRIPE_STATEMENT_DESCRIPTOR || 'SANDSTORM DIGITAL').slice(0, 22);
   const session = await client().checkout.sessions.create({
     mode: 'payment',
     line_items: [
@@ -44,6 +45,7 @@ async function createCheckout(packageId, origin) {
         quantity: 1
       }
     ],
+    payment_intent_data: { statement_descriptor: descriptor },
     metadata: { packageId: pkg.id, credits: String(pkg.credits) },
     success_url: `${origin}/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${origin}/?canceled=1`
