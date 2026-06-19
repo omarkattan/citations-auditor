@@ -86,6 +86,19 @@ async function consumeFree(ip, n) {
   );
 }
 
+// Create a standalone credit code (admin grants, comps, refunds) with no
+// Stripe session attached.
+async function createCode(credits, email) {
+  const p = getPool();
+  if (!p) return null;
+  const code = genCode();
+  await p.query(
+    'INSERT INTO credits (code, email, total, used, stripe_session_id) VALUES ($1, $2, $3, 0, NULL)',
+    [code, email || null, credits]
+  );
+  return { code, credits, balance: credits };
+}
+
 // Idempotent on the Stripe session id: returns the existing code for a session
 // if one was already created, otherwise creates it.
 async function createCodeForSession(sessionId, email, credits) {
@@ -108,5 +121,5 @@ module.exports = {
   enabled, init, genCode,
   getCodeBalance, consumeCode,
   getFreeRemaining, consumeFree,
-  createCodeForSession
+  createCode, createCodeForSession
 };

@@ -98,6 +98,16 @@ app.get('/api/checkout/result', async (req, res) => {
   }
 });
 
+// Admin: mint a credit code without payment (testing, comps, refunds).
+// e.g. /api/admin/grant?key=ADMIN_KEY&credits=1000
+app.get('/api/admin/grant', async (req, res) => {
+  if (req.query.key !== ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  if (!db.enabled()) return res.status(400).json({ error: 'Database not configured.' });
+  const credits = Math.max(1, Math.min(parseInt(req.query.credits || '500', 10), 100000));
+  const result = await db.createCode(credits, 'admin-grant');
+  res.json(result);
+});
+
 // Audit text the user pasted in (used when a site blocks automated fetches).
 app.post('/api/audit-text', async (req, res) => {
   const { text, url, findSources } = req.body || {};
