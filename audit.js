@@ -78,7 +78,19 @@ function collectText(content) {
     .trim();
 }
 
-async function callClaude(client, userContent, useWebSearch) {
+function isTransient(err) {
+  const m = ((err && err.message) || '').toLowerCase();
+  return (
+    m.includes('premature close') ||
+    m.includes('terminated') ||
+    m.includes('econnreset') ||
+    m.includes('socket hang up') ||
+    m.includes('fetch failed') ||
+    m.includes('other side closed')
+  );
+}
+
+async function callClaude(client, userContent, useWebSearch, attempt = 0) {
   const request = {
     model: MODEL,
     max_tokens: 2500,
@@ -86,14 +98,22 @@ async function callClaude(client, userContent, useWebSearch) {
     messages: [{ role: 'user', content: userContent }]
   };
   if (useWebSearch) {
-    request.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }];
+    request.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }];
   }
-  // Stream the response. Server-side web search can make a single call run for
-  // many seconds; a non-streamed request tends to drop with "Premature close".
-  // Streaming keeps the connection alive and assembles the final message.
-  const stream = client.messages.stream(request);
-  const finalMessage = await stream.finalMessage();
-  return collectText(finalMessage.content);
+  // Stream the response and assemble the final message. If the connection drops
+  // (Render free tier occasionally severs keep-alive sockets), retry a couple
+  // of times before giving up.
+  try {
+    const stream = client.messages.stream(request);
+    const finalMessage = await stream.finalMessage();
+    return collectText(finalMessage.content);
+  } catch (err) {
+    if (isTransient(err) && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      return callClaude(client, userContent, useWebSearch, attempt + 1);
+    }
+    throw err;
+  }
 }
 
 async function auditPage(url, { apiKey, findSources = true } = {}) {
@@ -124,7 +144,7 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
     return { url, title, error: 'Too little readable text to audit.', claims: [] };
   }
 
-  const client = new Anthropic({ apiKey: key });
+  const client = new Anthropic({ apiKey: key, maxRetries: 3, timeout: 120000 });
   const userContent = `Page URL: ${url}\nPage title: ${title}\n\nPage text:\n"""\n${text}\n"""`;
 
   let raw;
