@@ -372,6 +372,7 @@ app.get('/admin/scans', async (req, res) => {
     ? 'Storage: Google Sheet (durable).'
     : 'Storage: local file. Resets on redeploy and cold-start. Set GOOGLE_SHEET_ID and GOOGLE_SERVICE_ACCOUNT for durable history.';
   const body = `
+    ${adminNav(req, 'scans')}
     <div class="bar">
       <h1>Tested URLs (${total})</h1>
       <a class="dl" href="/admin/urls.csv?key=${encodeURIComponent(req.query.key)}">Download CSV</a>
@@ -398,6 +399,72 @@ app.get('/admin/urls.csv', async (req, res) => {
   res.send(csv);
 });
 
+// Admin nav shared across admin pages.
+function adminNav(req, active) {
+  const k = encodeURIComponent(req.query.key || '');
+  const link = (href, label, id) =>
+    id === active ? `<b>${label}</b>` : `<a href="${href}?key=${k}">${label}</a>`;
+  return `<p class="note">${link('/admin/scans', 'URLs &amp; Scans', 'scans')} &middot; ${link('/admin/credits', 'Users &amp; Credits', 'credits')}</p>`;
+}
+
+// Users and their credit balances.
+app.get('/admin/credits', async (req, res) => {
+  if (!adminOk(req)) return res.status(401).send('Unauthorized');
+  if (!db.enabled()) {
+    return res.send(adminShell(adminNav(req, 'credits') + '<p>Credits are not configured. Set DATABASE_URL to enable paid credits.</p>'));
+  }
+
+  const rows = await db.listCredits();
+
+  const codeCount = rows.length;
+  const sold = rows.filter((r) => r.source === 'stripe').reduce((a, r) => a + r.total, 0);
+  const granted = rows.filter((r) => r.source === 'grant').reduce((a, r) => a + r.total, 0);
+  const used = rows.reduce((a, r) => a + r.used, 0);
+  const outstanding = rows.reduce((a, r) => a + r.balance, 0);
+
+  const fmtDate = (d) => {
+    try { return new Date(d).toISOString().slice(0, 16).replace('T', ' '); } catch { return escHtml(String(d)); }
+  };
+
+  const body = rows.length
+    ? rows.map((r) => {
+        const status = r.balance > 0 ? '<span class="ok">active</span>' : '<span class="dim">empty</span>';
+        return `<tr>
+          <td>${fmtDate(r.created_at)}</td>
+          <td class="mono">${escHtml(r.code)}</td>
+          <td>${escHtml(r.email) || '<span class="dim">-</span>'}</td>
+          <td>${escHtml(r.source)}</td>
+          <td>${r.total}</td>
+          <td>${r.used}</td>
+          <td><b>${r.balance}</b></td>
+          <td>${status}</td>
+        </tr>`;
+      }).join('')
+    : '';
+
+  const table = body
+    ? `<table>
+        <thead><tr><th>Created</th><th>Code</th><th>Email</th><th>Source</th><th>Total</th><th>Used</th><th>Remaining</th><th>Status</th></tr></thead>
+        <tbody>${body}</tbody>
+      </table>`
+    : '<p>No credit codes yet.</p>';
+
+  const summary = `
+    <div class="cards">
+      <div class="card"><div class="n">${codeCount}</div><div class="l">Codes</div></div>
+      <div class="card"><div class="n">${sold}</div><div class="l">Credits sold</div></div>
+      <div class="card"><div class="n">${granted}</div><div class="l">Credits granted</div></div>
+      <div class="card"><div class="n">${used}</div><div class="l">Used</div></div>
+      <div class="card"><div class="n">${outstanding}</div><div class="l">Outstanding</div></div>
+    </div>`;
+
+  const content = `${adminNav(req, 'credits')}
+    <h1>Users &amp; Credits</h1>
+    ${summary}
+    ${table}`;
+  res.send(adminShell(content));
+});
+
 function adminShell(body) {
   return `<!doctype html><html><head><meta charset="utf-8">
     <title>Admin - Claims Auditor</title>
@@ -410,9 +477,17 @@ function adminShell(body) {
       th, td { text-align:left; padding:7px 10px; border-bottom:1px solid #1e2421; vertical-align:top; }
       th { color:#2ecc71; text-transform:uppercase; font-size:10px; letter-spacing:.08em; }
       td.u { max-width:520px; word-break:break-all; }
+      td.mono { font-family:'JetBrains Mono',ui-monospace,monospace; color:#9fe6bd; }
       .note { color:#8a948e; font-size:11px; margin:10px 0 0; }
+      .note b { color:#2ecc71; }
       a { color:#9fe6bd; text-decoration:none; }
       a:hover { color:#2ecc71; }
+      .cards { display:flex; flex-wrap:wrap; gap:10px; margin:16px 0 6px; }
+      .card { background:#12161300; border:1px solid #1e2421; border-radius:8px; padding:12px 16px; min-width:110px; }
+      .card .n { color:#2ecc71; font-size:22px; font-weight:700; }
+      .card .l { color:#8a948e; font-size:10px; text-transform:uppercase; letter-spacing:.08em; margin-top:2px; }
+      .ok { color:#2ecc71; }
+      .dim { color:#6f7a74; }
     </style></head><body>${body}</body></html>`;
 }
 
