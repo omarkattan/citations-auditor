@@ -110,6 +110,7 @@
 
   /* downloads */
   .downloads { display: none; align-items: center; gap: 10px; margin-bottom: 22px; }
+  #downloadsBottom { margin-top: 22px; }
   .dl-label { font-family: var(--mono); font-size: 12px; color: var(--muted);
     text-transform: uppercase; letter-spacing: .08em; margin-right: 4px; }
   .dl-btn { font-family: var(--mono); font-size: 12px; font-weight: 600; cursor: pointer;
@@ -184,6 +185,52 @@
     font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: center; }
   footer a { color: var(--green); text-decoration: none; }
 
+  /* marketing sections */
+  .mkt { margin-top: 56px; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--green); margin-bottom: 12px; }
+  .sec-title { font-family: var(--mono); font-weight: 700; font-size: 22px;
+    margin: 0 0 22px; letter-spacing: -0.01em; color: var(--text); }
+
+  .benefits { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .benefit { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .benefit .bp { font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--green); margin-bottom: 8px; }
+  .benefit h4 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+  .benefit p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  .pricing { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .price-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px; display: flex; flex-direction: column; position: relative; }
+  .price-card.popular { border-color: var(--green); }
+  .price-card .ptag { position: absolute; top: -10px; right: 16px; background: var(--green);
+    color: #06150c; font-family: var(--mono); font-size: 10px; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase; padding: 3px 8px; border-radius: 4px; }
+  .price-card .pname { font-family: var(--mono); font-size: 13px; color: var(--green);
+    text-transform: uppercase; letter-spacing: .08em; }
+  .price-card .pprice { font-family: var(--mono); font-size: 32px; font-weight: 700; margin: 8px 0 2px; }
+  .price-card .pcred { color: var(--text); font-size: 14px; }
+  .price-card .pper { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 4px; }
+  .price-card .pbtn { margin-top: auto; padding-top: 18px; }
+  .price-card .pbtn button { width: 100%; background: var(--green); color: #06150c; border: none;
+    border-radius: 8px; font-family: var(--mono); font-weight: 700; font-size: 13px; padding: 12px; cursor: pointer; }
+  .price-card .pbtn button:hover { filter: brightness(1.08); }
+  .pricing-note { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 16px; text-align: center; }
+
+  .faq { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .faq-item { border-bottom: 1px solid var(--line); }
+  .faq-item:last-child { border-bottom: none; }
+  .faq-item summary { cursor: pointer; padding: 16px 18px; font-weight: 600; font-size: 15px;
+    list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .faq-item summary::-webkit-details-marker { display: none; }
+  .faq-item summary::after { content: '+'; font-family: var(--mono); color: var(--green); font-size: 18px; flex: 0 0 auto; }
+  .faq-item[open] summary::after { content: '\2212'; }
+  .faq-item .fa { padding: 0 18px 16px; color: var(--muted); font-size: 14px; }
+
+  @media (max-width: 640px) {
+    .benefits, .pricing { grid-template-columns: 1fr; }
+  }
+
   @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
 </style>
 </head>
@@ -256,6 +303,76 @@
   </div>
   <div class="index-panel" id="indexPanel"></div>
   <div id="results"></div>
+  <div class="downloads" id="downloadsBottom">
+    <span class="dl-label">Download analysis</span>
+    <button class="dl-btn" id="dlCsv2">CSV</button>
+    <button class="dl-btn" id="dlPdf2">PDF</button>
+  </div>
+
+  <section class="mkt">
+    <div class="eyebrow">// why it matters</div>
+    <h2 class="sec-title">Claims are what readers and AI judge you on</h2>
+    <div class="benefits">
+      <div class="benefit">
+        <div class="bp">Trust</div>
+        <h4>Stop quietly losing credibility</h4>
+        <p>Unsupported claims read as filler and make visitors doubt the rest of the page. See exactly which lines undercut you, and how to back them up.</p>
+      </div>
+      <div class="benefit">
+        <div class="bp">AI visibility</div>
+        <h4>Get cited, not skipped</h4>
+        <p>ChatGPT, Gemini, and Perplexity quote pages they can verify. Evidenced claims are the ones that surface in AI answers about your space.</p>
+      </div>
+      <div class="benefit">
+        <div class="bp">Compliance</div>
+        <h4>Catch risky claims early</h4>
+        <p>In finance, health, and other high-stakes topics, an unsubstantiated claim is exposure. Find it before a customer or regulator does.</p>
+      </div>
+      <div class="benefit">
+        <div class="bp">Actionable</div>
+        <h4>Every flag comes with a fix</h4>
+        <p>Not just what is wrong: the E-E-A-T pillar it weakens, a recommended rewrite, and a real source you can cite.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="mkt" id="pricing">
+    <div class="eyebrow">// pricing</div>
+    <h2 class="sec-title">Simple credits. One per page.</h2>
+    <div class="pricing" id="pricingGrid"></div>
+    <div class="pricing-note">Your first 3 pages are free. Credits never expire, and you only pay for pages that actually run.</div>
+  </section>
+
+  <section class="mkt">
+    <div class="eyebrow">// faq</div>
+    <h2 class="sec-title">Questions</h2>
+    <div class="faq">
+      <details class="faq-item">
+        <summary>What does Claims Auditor check for?</summary>
+        <div class="fa">Unsourced statistics, superlatives like "the best" or "the leading," authority and award claims with no proof, absolute guarantees, and risky assertions on high-stakes topics. Each flag is mapped to the E-E-A-T pillar it weakens.</div>
+      </details>
+      <details class="faq-item">
+        <summary>What is E-E-A-T?</summary>
+        <div class="fa">Google's framework for judging content quality: Experience, Expertise, Authoritativeness, and Trustworthiness. It shapes how both search and AI assistants decide whether your pages are credible enough to rank and cite.</div>
+      </details>
+      <details class="faq-item">
+        <summary>How do credits work?</summary>
+        <div class="fa">One credit audits one page. Crawl mode audits several pages at once and uses one credit per page. You only pay for pages that actually run, never for ones that error or get blocked.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Do credits expire?</summary>
+        <div class="fa">No. Buy once and use them whenever you like. There is no subscription and no monthly reset.</div>
+      </details>
+      <details class="faq-item">
+        <summary>What if a site blocks the audit?</summary>
+        <div class="fa">Some sites use bot protection. Switch to Single URL or Paste text mode and the audit runs on the content directly. For your own or client sites, the crawler can be allowlisted on request.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Can I download the report?</summary>
+        <div class="fa">Yes. Export any audit as a CSV for spreadsheets or a formatted PDF to share with your client or team.</div>
+      </details>
+    </div>
+  </section>
 
   <footer>
     Claims Auditor &mdash; Another <a href="https://sandstormdigital.com" target="_blank" rel="noopener">Sandstorm Digital</a> Production
@@ -294,6 +411,12 @@
   const results = document.getElementById('results');
   const indexPanel = document.getElementById('indexPanel');
   const downloads = document.getElementById('downloads');
+  const downloadsBottom = document.getElementById('downloadsBottom');
+  function showDownloads(show) {
+    const d = show ? 'flex' : 'none';
+    downloads.style.display = d;
+    downloadsBottom.style.display = d;
+  }
   const runBtn = document.getElementById('run');
   let pageIndex = {};
   let scanData = [];
@@ -399,7 +522,7 @@
     pageIndex = {};
     scanData = [];
     scanMeta = { url, source };
-    downloads.style.display = 'none';
+    showDownloads(false);
     runBtn.disabled = true;
     runBtn.textContent = 'Auditing...';
 
@@ -427,7 +550,7 @@
       const d = JSON.parse(e.data);
       log('> done in ' + d.durationSec + 's', 'ok');
       renderSummary(d);
-      if (scanData.length) downloads.style.display = 'flex';
+      if (scanData.length) showDownloads(true);
       if (d.balance !== undefined) setBalance(d.balance);
       es.close();
       runBtn.disabled = false;
@@ -456,7 +579,7 @@
     summary.innerHTML = '';
     indexPanel.style.display = 'none';
     indexPanel.innerHTML = '';
-    downloads.style.display = 'none';
+    showDownloads(false);
     results.innerHTML = '';
     pageIndex = {};
     scanData = [];
@@ -496,7 +619,7 @@
         highSeverity: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
         durationSec: Math.round((Date.now() - started) / 1000)
       });
-      if (scanData.length) downloads.style.display = 'flex';
+      if (scanData.length) showDownloads(true);
       if (page.balance !== undefined) setBalance(page.balance);
       log('> done', 'ok');
     } catch (err) {
@@ -601,6 +724,8 @@
 
   document.getElementById('dlCsv').addEventListener('click', exportCsv);
   document.getElementById('dlPdf').addEventListener('click', exportPdf);
+  document.getElementById('dlCsv2').addEventListener('click', exportCsv);
+  document.getElementById('dlPdf2').addEventListener('click', exportPdf);
 
   function start() {
     if (source === 'paste') runPasteAudit();
@@ -660,9 +785,30 @@
       b.addEventListener('click', () => buyPackage(b.dataset.pkg, enabled)));
   }
 
+  function renderPricingGrid(packages, enabled) {
+    const grid = document.getElementById('pricingGrid');
+    if (!grid || !packages.length) return;
+    const mid = Math.floor(packages.length / 2);
+    grid.innerHTML = packages.map((p, i) => {
+      const per = (p.amount / 100) / p.credits;
+      const popular = i === mid;
+      return '<div class="price-card' + (popular ? ' popular' : '') + '">' +
+        (popular ? '<div class="ptag">Most popular</div>' : '') +
+        '<div class="pname">' + esc(p.name) + '</div>' +
+        '<div class="pprice">$' + (p.amount / 100).toFixed(2) + '</div>' +
+        '<div class="pcred">' + p.credits + ' page credits</div>' +
+        '<div class="pper">$' + per.toFixed(2) + ' per page</div>' +
+        '<div class="pbtn"><button data-pkg="' + esc(p.id) + '">Buy ' + esc(p.name) + '</button></div>' +
+      '</div>';
+    }).join('');
+    grid.querySelectorAll('button[data-pkg]').forEach((b) =>
+      b.addEventListener('click', () => buyPackage(b.dataset.pkg, enabled)));
+  }
+
   async function initCredits() {
     try {
       const pkg = await (await fetch('/api/packages')).json();
+      renderPricingGrid(pkg.packages || [], pkg.paymentsEnabled);
       await refreshCredits();
       if (!paywall) return;
       creditsBar.style.display = 'flex';
