@@ -64,6 +64,46 @@ Return ONLY a JSON array, no prose, no markdown fences. Each item must be exactl
 
 Return at most 12 of the most important claims. If the page has no unsubstantiated claims, return [].`;
 
+const FACTCHECK_PROMPT = `You are an E-E-A-T claim auditor AND fact-checker for a digital marketing agency. You read the text of a single web page and do TWO jobs.
+
+1) SUBSTANTIATION. Flag claims that are unsupported on the page, judged against Google's E-E-A-T guidelines:
+- Unsourced statistics or numbers
+- Unproven superlatives ("the best", "#1", "leading", "fastest")
+- Authority or award claims with no proof
+- Health, finance, legal, or safety (YMYL) assertions stated as fact
+- Absolute guarantees ("guaranteed", "always", "never", "100% safe")
+
+2) ACCURACY AND RECENCY. For concrete, checkable factual claims (statistics, dates, prices, tax or regulatory figures, version numbers, "first/only/largest/oldest" claims, named facts), use web search to verify them against current reliable sources and compare:
+- If the claim conflicts with what current reliable sources say, set finding_type to "inaccurate".
+- If the claim was likely true once but is now superseded by newer data, prices, versions, or dates, set finding_type to "outdated".
+- If it merely lacks backing on the page, set finding_type to "unsubstantiated".
+
+CONFIDENCE AND HONESTY (important):
+- Only assert "inaccurate" or "outdated" when you actually found a credible contradicting or updated source. Set confidence "high" or "medium", put what current sources say in current_fact, and put that source in suggested_source.
+- If something looks questionable but you cannot confirm it is wrong (no definitive source, or sources disagree), do NOT claim it is wrong. Flag it with confidence "low", set finding_type to your best guess, and write the issue as a "worth verifying" note explaining what to check. Leave current_fact as "".
+- Never invent a source, URL, statistic, or "current fact". When unverified, use low confidence.
+
+Do NOT flag subjective opinion framed as opinion, claims already supported on the page with a visible source, or ordinary descriptive copy.
+
+Return ONLY a JSON array, no prose, no markdown fences. Each item must be exactly:
+{
+  "claim": "the claim text, trimmed",
+  "context": "a short surrounding snippet for locating it",
+  "finding_type": "unsubstantiated | inaccurate | outdated",
+  "claim_type": "statistic | superlative | authority | testimonial | ymyl | absolute | fact | other",
+  "eeat": "Experience | Expertise | Authoritativeness | Trustworthiness",
+  "severity": "high | medium | low",
+  "confidence": "high | medium | low",
+  "issue": "one sentence on why it is unsubstantiated, conflicts with current sources, or is outdated (or a 'worth verifying' note when confidence is low)",
+  "current_fact": "what current reliable sources actually say, for inaccurate or outdated findings; otherwise an empty string",
+  "recommendation": "the correction, or the evidence that would substantiate it",
+  "suggested_source": { "title": "source title", "url": "https://..." } or null
+}
+
+Return at most 12 of the most important findings. If the page has none, return [].`;
+
+function buildSystemPrompt(factCheck) { return factCheck ? FACTCHECK_PROMPT : SYSTEM_PROMPT; }
+
 function extractText(html) {
   const $ = cheerio.load(html);
   $('script, style, noscript, nav, footer, header, aside, form, svg').remove();
@@ -114,15 +154,15 @@ function isTransient(err) {
   );
 }
 
-async function callClaude(client, userContent, useWebSearch, attempt = 0) {
+async function callClaude(client, userContent, useWebSearch, system, attempt = 0) {
   const request = {
     model: MODEL,
     max_tokens: 2500,
-    system: SYSTEM_PROMPT,
+    system: system || SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userContent }]
   };
   if (useWebSearch) {
-    request.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }];
+    request.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }];
   }
   // Stream the response and assemble the final message. If the connection drops
   // (Render free tier occasionally severs keep-alive sockets), retry a couple
@@ -140,7 +180,7 @@ async function callClaude(client, userContent, useWebSearch, attempt = 0) {
   } catch (err) {
     if (isTransient(err) && attempt < 2) {
       await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-      return callClaude(client, userContent, useWebSearch, attempt + 1);
+      return callClaude(client, userContent, useWebSearch, system, attempt + 1);
     }
     throw err;
   }
@@ -154,7 +194,7 @@ function addUsage(acc, u) {
   return acc;
 }
 
-async function auditPage(url, { apiKey, findSources = true } = {}) {
+async function auditPage(url, { apiKey, findSources = true, factCheck = false } = {}) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set.');
 
@@ -192,14 +232,14 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
     return { url, title, error: 'Too little readable text to audit.', claims: [], browserless };
   }
 
-  const result = await runClaims(url, title, text, findSources, key);
+  const result = await runClaims(url, title, text, findSources, key, factCheck);
   result.browserless = browserless;
   return result;
 }
 
 // Audit text the user pasted in (used when a site blocks automated fetches).
 // Accepts either plain page copy or raw HTML.
-async function auditText(rawText, { url = 'Pasted text', title = '', apiKey, findSources = true } = {}) {
+async function auditText(rawText, { url = 'Pasted text', title = '', apiKey, findSources = true, factCheck = false } = {}) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set.');
 
@@ -216,29 +256,33 @@ async function auditText(rawText, { url = 'Pasted text', title = '', apiKey, fin
     return { url, title, error: 'Too little text to audit. Paste the page copy and try again.', claims: [] };
   }
 
-  return runClaims(url, title, text, findSources, key);
+  return runClaims(url, title, text, findSources, key, factCheck);
 }
 
-// Shared core: send the page text to Claude and return parsed claims, with a
-// recommendation-only fallback if the web-search call fails.
-async function runClaims(url, title, text, findSources, apiKey) {
+// Shared core: send the page text to Claude and return parsed claims. When
+// factCheck is on, the prompt also verifies accuracy and recency via web search.
+// Falls back to substantiation-only (no search) if the search call fails.
+async function runClaims(url, title, text, findSources, apiKey, factCheck = false) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set.');
 
   const client = makeClient(key, { maxRetries: 3, timeout: 120000 });
   const userContent = `Page URL: ${url}\nPage title: ${title}\n\nPage text:\n"""\n${text}\n"""`;
   const usage = { ...ZERO_USAGE };
+  // Fact-checking requires web search to verify against current sources.
+  const useSearch = findSources || factCheck;
+  const system = buildSystemPrompt(factCheck);
 
   try {
-    const r = await callClaude(client, userContent, findSources);
+    const r = await callClaude(client, userContent, useSearch, system);
     addUsage(usage, r.usage);
     return { url, title, claims: parseClaims(r.text), usage };
   } catch (err) {
-    // If web search is unavailable on this account, fall back to
-    // recommendation-only so the audit still completes.
-    if (findSources) {
+    // If web search is unavailable, fall back to substantiation-only (no
+    // search, base prompt) so the audit still completes.
+    if (useSearch) {
       try {
-        const r = await callClaude(client, userContent, false);
+        const r = await callClaude(client, userContent, false, SYSTEM_PROMPT);
         addUsage(usage, r.usage);
         return { url, title, claims: parseClaims(r.text), usage };
       } catch (err2) {
