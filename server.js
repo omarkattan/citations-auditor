@@ -155,7 +155,7 @@ app.get('/api/admin/grant', async (req, res) => {
 
 // Audit text the user pasted in (used when a site blocks automated fetches).
 app.post('/api/audit-text', async (req, res) => {
-  const { text, url, findSources } = req.body || {};
+  const { text, url, findSources, factCheck } = req.body || {};
   if (!text || !text.trim()) return res.status(400).json({ error: 'No text provided.' });
 
   const account = await resolveAccount(req);
@@ -169,7 +169,7 @@ app.post('/api/audit-text', async (req, res) => {
   const started = Date.now();
   const label = (url || '').trim() || 'Pasted text';
   try {
-    const result = await auditText(text, { url: label, findSources: findSources !== false });
+    const result = await auditText(text, { url: label, findSources: findSources !== false, factCheck: factCheck === true });
     const claims = result.claims || [];
     if (account.paywall && !result.error) await chargeAccount(account, 1);
     await logScan({
@@ -240,6 +240,7 @@ app.get('/api/scan/stream', async (req, res) => {
   const source = (req.query.source || 'crawl').trim();
   const pathPrefix = (req.query.path || '').trim();
   const findSources = req.query.findSources !== 'false';
+  const factCheck = req.query.factCheck === 'true';
   let maxPages = parseInt(req.query.maxPages, 10) || 15;
   maxPages = Math.max(1, Math.min(maxPages, MAX_PAGES_CAP));
 
@@ -310,7 +311,7 @@ app.get('/api/scan/stream', async (req, res) => {
       const pageUrl = pages[i];
       send('status', { message: `Auditing ${i + 1} of ${pages.length}`, index: i + 1, total: pages.length });
 
-      const result = await auditPage(pageUrl, { findSources });
+      const result = await auditPage(pageUrl, { findSources, factCheck });
       const claims = result.claims || [];
       const high = claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length;
       totalClaims += claims.length;
