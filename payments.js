@@ -12,11 +12,13 @@ try {
   Stripe = null;
 }
 
-// 1 credit = 1 page audited. amount is in cents.
+// Credits are spent per audited page: 1 credit for a standard audit, more for a
+// fact-checked page (see FACTCHECK_CREDIT_COST in server.js). amount is in cents.
+// Prices are set so a worst-case page still clears a 50%+ margin after costs.
 const PACKAGES = {
-  starter: { id: 'starter', name: 'Starter', amount: 999, credits: 40 },
-  pro: { id: 'pro', name: 'Pro', amount: 1499, credits: 70 },
-  agency: { id: 'agency', name: 'Agency', amount: 1999, credits: 110 }
+  starter: { id: 'starter', name: 'Starter', amount: 1200, credits: 35 },
+  pro: { id: 'pro', name: 'Pro', amount: 2000, credits: 65 },
+  agency: { id: 'agency', name: 'Agency', amount: 3500, credits: 120 }
 };
 
 function enabled() {
@@ -32,6 +34,7 @@ async function createCheckout(packageId, origin) {
   const pkg = PACKAGES[packageId];
   if (!pkg) throw new Error('Unknown package.');
 
+  const descriptor = (process.env.STRIPE_STATEMENT_DESCRIPTOR || 'SANDSTORM DIGITAL').slice(0, 22);
   const session = await client().checkout.sessions.create({
     mode: 'payment',
     line_items: [
@@ -44,6 +47,7 @@ async function createCheckout(packageId, origin) {
         quantity: 1
       }
     ],
+    payment_intent_data: { statement_descriptor: descriptor },
     metadata: { packageId: pkg.id, credits: String(pkg.credits) },
     success_url: `${origin}/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${origin}/?canceled=1`
@@ -59,11 +63,18 @@ async function fulfillSession(sessionId) {
   if (!session || session.payment_status !== 'paid') return null;
   const credits = parseInt((session.metadata && session.metadata.credits) || '0', 10);
   const email = (session.customer_details && session.customer_details.email) || null;
-  return db.createCodeForSession(sessionId, email, credits);
+  const pi = typeof session.payment_intent === 'string' ? session.payment_intent : (session.payment_intent && session.payment_intent.id) || null;
+  return db.createCodeForSession(sessionId, email, credits, pi);
+}
+
+// Zero out the credits of any code tied to a refunded/disputed payment intent.
+async function voidByPaymentIntent(paymentIntent) {
+  if (!enabled() || !paymentIntent) return [];
+  return db.voidByPaymentIntent(paymentIntent);
 }
 
 function verifyWebhook(rawBody, signature) {
   return client().webhooks.constructEvent(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
 }
 
-module.exports = { PACKAGES, enabled, createCheckout, fulfillSession, verifyWebhook };
+module.exports = { PACKAGES, enabled, createCheckout, fulfillSession, voidByPaymentIntent, verifyWebhook };
