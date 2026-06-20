@@ -40,10 +40,12 @@ async function init() {
       used INTEGER NOT NULL DEFAULT 0,
       stripe_session_id TEXT UNIQUE,
       payment_intent TEXT,
+      voided_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
-  // Migration for tables created before payment_intent existed.
+  // Migrations for tables created before these columns existed.
   await p.query('ALTER TABLE credits ADD COLUMN IF NOT EXISTS payment_intent TEXT');
+  await p.query('ALTER TABLE credits ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ');
   await p.query(`
     CREATE TABLE IF NOT EXISTS free_usage (
       ip TEXT PRIMARY KEY,
@@ -126,8 +128,9 @@ async function createCodeForSession(sessionId, email, credits, paymentIntent) {
 async function voidByPaymentIntent(paymentIntent) {
   const p = getPool();
   if (!p || !paymentIntent) return [];
+  // AND voided_at IS NULL makes repeated refund/dispute events idempotent.
   const r = await p.query(
-    'UPDATE credits SET used = total WHERE payment_intent = $1 RETURNING code, total',
+    'UPDATE credits SET used = total, voided_at = now() WHERE payment_intent = $1 AND voided_at IS NULL RETURNING code, total',
     [paymentIntent]
   );
   return r.rows.map((row) => ({ code: row.code, voided: row.total }));
@@ -138,7 +141,7 @@ async function listCredits() {
   const p = getPool();
   if (!p) return [];
   const r = await p.query(
-    'SELECT code, email, total, used, stripe_session_id, payment_intent, created_at FROM credits ORDER BY created_at DESC'
+    'SELECT code, email, total, used, stripe_session_id, payment_intent, voided_at, created_at FROM credits ORDER BY created_at DESC'
   );
   return r.rows.map((row) => ({
     code: row.code,
@@ -147,6 +150,7 @@ async function listCredits() {
     used: row.used,
     balance: Math.max(0, row.total - row.used),
     source: row.stripe_session_id ? 'stripe' : 'grant',
+    voided: !!row.voided_at,
     created_at: row.created_at
   }));
 }
