@@ -41,7 +41,7 @@ async function createCheckout(packageId, origin) {
       {
         price_data: {
           currency: 'usd',
-          product_data: { name: `Claims Auditor ${pkg.name} - ${pkg.credits} page credits` },
+          product_data: { name: `Claims Auditor ${pkg.name} - ${pkg.credits} credits` },
           unit_amount: pkg.amount
         },
         quantity: 1
