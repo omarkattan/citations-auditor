@@ -421,6 +421,7 @@ app.get('/admin/credits', async (req, res) => {
   const granted = rows.filter((r) => r.source === 'grant').reduce((a, r) => a + r.total, 0);
   const used = rows.reduce((a, r) => a + r.used, 0);
   const outstanding = rows.reduce((a, r) => a + r.balance, 0);
+  const voidedCount = rows.filter((r) => r.voided).length;
 
   const fmtDate = (d) => {
     try { return new Date(d).toISOString().slice(0, 16).replace('T', ' '); } catch { return escHtml(String(d)); }
@@ -428,7 +429,9 @@ app.get('/admin/credits', async (req, res) => {
 
   const body = rows.length
     ? rows.map((r) => {
-        const status = r.balance > 0 ? '<span class="ok">active</span>' : '<span class="dim">empty</span>';
+        const status = r.voided
+          ? '<span class="bad">voided</span>'
+          : r.balance > 0 ? '<span class="ok">active</span>' : '<span class="dim">empty</span>';
         return `<tr>
           <td>${fmtDate(r.created_at)}</td>
           <td class="mono">${escHtml(r.code)}</td>
@@ -456,6 +459,7 @@ app.get('/admin/credits', async (req, res) => {
       <div class="card"><div class="n">${granted}</div><div class="l">Credits granted</div></div>
       <div class="card"><div class="n">${used}</div><div class="l">Used</div></div>
       <div class="card"><div class="n">${outstanding}</div><div class="l">Outstanding</div></div>
+      <div class="card"><div class="n">${voidedCount}</div><div class="l">Voided</div></div>
     </div>`;
 
   const content = `${adminNav(req, 'credits')}
@@ -488,6 +492,7 @@ function adminShell(body) {
       .card .l { color:#8a948e; font-size:10px; text-transform:uppercase; letter-spacing:.08em; margin-top:2px; }
       .ok { color:#2ecc71; }
       .dim { color:#6f7a74; }
+      .bad { color:#ff6b6b; }
     </style></head><body>${body}</body></html>`;
 }
 
