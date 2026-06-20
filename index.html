@@ -184,6 +184,10 @@
   footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line);
     font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: center; }
   footer a { color: var(--green); text-decoration: none; }
+  .stripe-badge { margin-top: 10px; display: inline-flex; align-items: center; gap: 6px;
+    color: var(--muted); font-size: 11px; }
+  .stripe-badge svg { width: 12px; height: 12px; flex: 0 0 auto; }
+  .stripe-word { color: #635bff; font-weight: 700; }
 
   /* marketing sections */
   .mkt { margin-top: 56px; }
@@ -375,7 +379,11 @@
   </section>
 
   <footer>
-    Claims Auditor &mdash; Another <a href="https://sandstormdigital.com" target="_blank" rel="noopener">Sandstorm Digital</a> Production
+    <div>Claims Auditor - Another <a href="https://sandstormdigital.com" target="_blank" rel="noopener">Sandstorm Digital</a> Production</div>
+    <div class="stripe-badge">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
+      <span>Payments processed securely by <span class="stripe-word">Stripe</span></span>
+    </div>
   </footer>
 </div>
 
