@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -267,8 +268,9 @@
   .ring-elapsed { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 5px; }
 
   .scan-phase { font-family: var(--mono); font-size: 13px; color: var(--green); min-height: 18px; margin-bottom: 6px; }
-  .scan-activity { font-family: var(--mono); font-size: 11px; color: var(--muted); min-height: 15px; margin-bottom: 16px; transition: opacity .25s ease; }
+  .scan-activity { font-family: var(--mono); font-size: 11px; color: var(--muted); min-height: 15px; margin-bottom: 4px; transition: opacity .25s ease; }
   .scan-activity.swap { opacity: 0; }
+  .scan-detail { font-family: var(--mono); font-size: 11px; color: var(--green-dim); min-height: 15px; margin-bottom: 16px; word-break: break-all; }
 
   .scan-steps { display: flex; gap: 8px; justify-content: center; margin-bottom: 22px; }
   .scan-step { font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
@@ -309,6 +311,7 @@
     </div>
     <div class="scan-phase" id="scanPhase" role="status" aria-live="polite">Starting</div>
     <div class="scan-activity" id="scanActivity"></div>
+    <div class="scan-detail" id="scanDetail"></div>
     <div class="scan-steps">
       <span class="scan-step" id="stepDiscover">Discover</span>
       <span class="scan-step" id="stepAudit">Audit</span>
@@ -627,9 +630,17 @@
   ];
   let ovTimer = null, ovQuote = null, ovAct = null, ovAnim = null;
   let ovStart = 0, ovQi = 0, ovTotal = 0, ovDone = 0;
-  let ovShown = 0, ovTarget = 0, ovFloor = 0, ovDoneFlag = false;
-  let ovActPool = AUDIT_ACTS, ovActIdx = 0;
+  let ovShown = 0, ovFloorPct = 0, ovCeilPct = 0, ovSliceStart = 0, ovDoneFlag = false;
+  let ovActPool = AUDIT_ACTS, ovActIdx = 0, ovUrls = [];
+  const SLICE_TAU = 26; // seconds; larger = slower, more gradual climb
   const ov = (id) => document.getElementById(id);
+
+  function ovShortUrl(u) {
+    if (!u) return '';
+    try { const x = new URL(u); const s = x.hostname.replace(/^www\./, '') + x.pathname; return s.length > 36 ? s.slice(0, 35) + '...' : s; }
+    catch { return u.length > 36 ? u.slice(0, 35) + '...' : u; }
+  }
+  function ovDetail(msg) { const e = ov('scanDetail'); if (e) e.textContent = msg || ''; }
 
   function ovFmt(s) { return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
   function ovTick() { ov('ringElapsed').textContent = ovFmt(Math.round((Date.now() - ovStart) / 1000)); }
@@ -666,36 +677,44 @@
   }
   function ovActStop(msg) { clearInterval(ovAct); ovAct = null; if (msg) { const e = ov('scanActivity'); if (e) e.textContent = msg; } }
 
-  // Time-driven progress: the ring eases toward a target that climbs on its own
-  // along an easing curve toward 92%, so it always moves even when events are
-  // sparse. Completed pages raise a floor that can push it faster; finishing
-  // snaps it to 100. This guarantees the bar is never stuck.
+  // Progress is split into slices (discovery, then one per page). Within a slice
+  // the bar eases from the slice floor toward its ceiling along a gentle curve,
+  // so it climbs gradually rather than rushing to the top. Each completed page
+  // raises the floor (real forward steps); finishing snaps to 100.
   function ovRender() {
     const pct = Math.max(0, Math.min(100, ovShown));
     ov('ringPct').textContent = Math.round(pct) + '%';
     ov('ringFg').style.strokeDashoffset = String(RING_C * (1 - pct / 100));
   }
   function ovLoop() {
+    let target;
     if (ovDoneFlag) {
-      ovTarget = 100;
+      target = 100;
     } else {
-      const t = (Date.now() - ovStart) / 1000;
-      const timeTarget = 92 * (1 - Math.exp(-t / 18));
-      ovTarget = Math.min(96, Math.max(ovFloor, timeTarget));
+      const t = (Date.now() - ovSliceStart) / 1000;
+      const p = 1 - Math.exp(-t / SLICE_TAU);
+      target = ovFloorPct + (ovCeilPct - ovFloorPct) * p;
     }
-    ovShown += (ovTarget - ovShown) * 0.16;
-    if (Math.abs(ovTarget - ovShown) < 0.06) ovShown = ovTarget;
+    ovShown += (target - ovShown) * 0.13;
+    if (Math.abs(target - ovShown) < 0.05) ovShown = target;
+    if (ovShown > 100) ovShown = 100;
     ovRender();
   }
   function ovStartAnim() { clearInterval(ovAnim); ovAnim = setInterval(ovLoop, 100); }
   function ovStopAnim() { clearInterval(ovAnim); ovAnim = null; }
-  function ovBand(floor) { if (floor > ovFloor) ovFloor = floor; }
-  function ovPageBand(done, total) { ovBand(15 + (done / Math.max(1, total)) * 80); }
+  // Open a new slice: raise the floor (monotonic), set the ceiling, reset timing.
+  function ovSlice(floor, ceil) {
+    ovFloorPct = Math.max(ovFloorPct, floor);
+    ovCeilPct = Math.max(ovFloorPct, ceil);
+    ovSliceStart = Date.now();
+  }
+  // Page boundaries live in the 15-90% band so the bar never sits at ~94.
+  function ovBound(k, total) { return 15 + (k / Math.max(1, total)) * 75; }
 
   function overlayShow() {
-    ovStart = Date.now(); ovQi = 0; ovTotal = 0; ovDone = 0;
-    ovShown = 0; ovTarget = 0; ovFloor = 0; ovDoneFlag = false;
-    ovPhase('Starting'); ovStep('Discover');
+    ovStart = Date.now(); ovQi = 0; ovTotal = 0; ovDone = 0; ovUrls = [];
+    ovShown = 0; ovFloorPct = 0; ovCeilPct = 12; ovSliceStart = Date.now(); ovDoneFlag = false;
+    ovPhase('Starting'); ovStep('Discover'); ovDetail('');
     ov('ringElapsed').textContent = '0:00';
     ovSetInsight(ovQi++);
     ovRender();
@@ -755,15 +774,18 @@
       if (d.total) {
         ovStep('Audit');
         ovPhase('Auditing page ' + d.index + ' of ' + d.total);
-        ovPageBand(d.index - 1, d.total);
+        ovSlice(ovBound(d.index - 1, d.total), ovBound(d.index, d.total));
+        if (ovUrls[d.index - 1]) ovDetail('Reading ' + ovShortUrl(ovUrls[d.index - 1]));
       }
     });
     es.addEventListener('pages', (e) => {
       const d = JSON.parse(e.data);
       log('> found ' + d.count + ' page' + (d.count === 1 ? '' : 's') + (d.capped ? ' (limited to your credits)' : ''), 'ok');
       renderIndex(d.urls || []);
+      ovUrls = d.urls || [];
       ovTotal = d.count; ovDone = 0;
-      ovStep('Audit'); ovPageBand(0, ovTotal); ovActCycle(AUDIT_ACTS);
+      ovStep('Audit'); ovActCycle(AUDIT_ACTS);
+      ovSlice(15, ovBound(1, ovTotal));
       ovPhase('Auditing ' + d.count + ' page' + (d.count === 1 ? '' : 's'));
     });
     es.addEventListener('page', (e) => {
@@ -773,7 +795,10 @@
       scanData.push(page);
       updateIndex(page);
       renderPage(page);
-      ovDone++; ovPageBand(ovDone, ovTotal || scanData.length);
+      ovDone++;
+      const tot = ovTotal || scanData.length;
+      ovSlice(ovBound(ovDone, tot), ovBound(ovDone, tot));
+      ovDetail(ovDone + '/' + tot + '  ' + ovShortUrl(page.url) + '  ' + n + ' claim' + (n === 1 ? '' : 's'));
     });
     es.addEventListener('done', (e) => {
       const d = JSON.parse(e.data);
@@ -820,6 +845,7 @@
     runBtn.textContent = 'Auditing...';
     overlayShow();
     ovStep('Audit'); ovPhase('Auditing content'); ovActCycle(AUDIT_ACTS);
+    ovSlice(8, 88); ovDetail('Reading pasted content');
 
     const started = Date.now();
     log('> auditing pasted text', 'dim');
@@ -857,6 +883,7 @@
       });
       if (scanData.length) showDownloads(true);
       if (page.balance !== undefined) setBalance(page.balance);
+      ovDetail(ovShortUrl(page.url || 'pasted text') + '  ' + claims.length + ' claim' + (claims.length === 1 ? '' : 's'));
       ovPhase('Compiling report'); ovStep('Report');
       overlayFinish();
       log('> done', 'ok');
