@@ -214,6 +214,7 @@
     text-transform: uppercase; letter-spacing: .08em; }
   .price-card .pprice { font-family: var(--mono); font-size: 32px; font-weight: 700; margin: 8px 0 2px; }
   .price-card .pcred { color: var(--text); font-size: 14px; }
+  .price-card .puse { color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.5; }
   .price-card .pper { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 4px; }
   .price-card .pbtn { margin-top: auto; padding-top: 18px; }
   .price-card .pbtn button { width: 100%; background: var(--green); color: #06150c; border: none;
@@ -430,33 +431,33 @@
     <h2 class="sec-title">Claims are what readers and AI judge you on</h2>
     <div class="benefits">
       <div class="benefit">
-        <div class="bp">Trust</div>
+        <div class="bp">Substantiation</div>
         <h4>Stop quietly losing credibility</h4>
-        <p>Unsupported claims read as filler and make visitors doubt the rest of the page. See exactly which lines undercut you, and how to back them up.</p>
+        <p>Unsourced stats, superlatives, and authority claims read as filler and make visitors doubt the rest of the page. See which lines undercut you and how to back them up, each mapped to the E-E-A-T pillar it weakens.</p>
+      </div>
+      <div class="benefit">
+        <div class="bp">Accuracy and recency</div>
+        <h4>Catch wrong and outdated facts</h4>
+        <p>Turn on fact-check and the audit verifies concrete claims, stats, dates, and prices against current sources. It flags what is inaccurate or out of date, shows what the latest sources say, and links the proof. Catch it before a customer or regulator does.</p>
       </div>
       <div class="benefit">
         <div class="bp">AI visibility</div>
         <h4>Get cited, not skipped</h4>
-        <p>ChatGPT, Gemini, and Perplexity quote pages they can verify. Evidenced claims are the ones that surface in AI answers about your space.</p>
-      </div>
-      <div class="benefit">
-        <div class="bp">Compliance</div>
-        <h4>Catch risky claims early</h4>
-        <p>In finance, health, and other high-stakes topics, an unsubstantiated claim is exposure. Find it before a customer or regulator does.</p>
+        <p>ChatGPT, Gemini, and Perplexity quote pages they can verify. Accurate, well-evidenced claims are the ones that surface in AI answers about your space.</p>
       </div>
       <div class="benefit">
         <div class="bp">Actionable</div>
         <h4>Every flag comes with a fix</h4>
-        <p>Not just what is wrong: the E-E-A-T pillar it weakens, a recommended rewrite, and a real source you can cite.</p>
+        <p>Not just what is wrong: a recommended rewrite or correction, a real source you can cite, and a clear confidence level so you know what to act on first.</p>
       </div>
     </div>
   </section>
 
   <section class="mkt" id="pricing">
     <div class="eyebrow">// pricing</div>
-    <h2 class="sec-title">Simple credits. One per page.</h2>
+    <h2 class="sec-title">Simple credits. Pay as you audit.</h2>
     <div class="pricing" id="pricingGrid"></div>
-    <div class="pricing-note">Your first 3 pages are free. Credits never expire, and you only pay for pages that actually run.</div>
+    <div class="pricing-note">Your first 3 pages are free. A standard audit costs 1 credit; a fact-checked audit costs 3. Credits never expire, and you only pay for pages that actually run.</div>
   </section>
 
   <section class="mkt">
@@ -465,7 +466,11 @@
     <div class="faq">
       <details class="faq-item">
         <summary>What does Claims Auditor check for?</summary>
-        <div class="fa">Unsourced statistics, superlatives like "the best" or "the leading," authority and award claims with no proof, absolute guarantees, and risky assertions on high-stakes topics. Each flag is mapped to the E-E-A-T pillar it weakens.</div>
+        <div class="fa">Two things. First, substantiation: unsourced statistics, superlatives like "the best" or "the leading," authority and award claims with no proof, absolute guarantees, and risky assertions on high-stakes topics, each mapped to the E-E-A-T pillar it weakens. Second, with fact-check turned on, accuracy and recency: it verifies concrete facts, stats, dates, and prices against current sources and flags anything inaccurate or outdated.</div>
+      </details>
+      <details class="faq-item">
+        <summary>Does it check whether facts are accurate or just unsourced?</summary>
+        <div class="fa">Both, when you enable fact-check. It searches current reliable sources and labels each finding as inaccurate (conflicts with what sources now say), outdated (was true once but superseded), or unsubstantiated (simply unsupported on the page). When it cannot confirm something is wrong, it does not claim it is. It flags it as "worth verifying" with low confidence so you can check, and it never invents a source.</div>
       </details>
       <details class="faq-item">
         <summary>What is E-E-A-T?</summary>
@@ -473,7 +478,7 @@
       </details>
       <details class="faq-item">
         <summary>How do credits work?</summary>
-        <div class="fa">One credit audits one page. Crawl mode audits several pages at once and uses one credit per page. You only pay for pages that actually run, never for ones that error or get blocked.</div>
+        <div class="fa">A standard audit uses 1 credit per page. A fact-checked audit uses 3 credits per page, because verifying facts against live sources does more work. Crawl mode audits several pages at once and charges per page. You only pay for pages that actually run, never for ones that error or get blocked.</div>
       </details>
       <details class="faq-item">
         <summary>Do credits expire?</summary>
@@ -485,7 +490,7 @@
       </details>
       <details class="faq-item">
         <summary>Can I download the report?</summary>
-        <div class="fa">Yes. Export any audit as a CSV for spreadsheets or a formatted PDF to share with your client or team.</div>
+        <div class="fa">Yes. Export any audit as a CSV for spreadsheets or a formatted PDF to share with your client or team. Fact-check findings, current-source notes, and confidence levels are included.</div>
       </details>
     </div>
   </section>
@@ -1098,26 +1103,29 @@
     buyPanel.innerHTML = packages.map((p) =>
       '<div class="pkg"><h3>' + esc(p.name) + '</h3>' +
       '<div class="price">$' + (p.amount / 100).toFixed(2) + '</div>' +
-      '<div class="cr">' + p.credits + ' page credits</div>' +
+      '<div class="cr">' + p.credits + ' credits</div>' +
       '<button data-pkg="' + esc(p.id) + '">Buy</button></div>'
     ).join('');
     buyPanel.querySelectorAll('button[data-pkg]').forEach((b) =>
       b.addEventListener('click', () => buyPackage(b.dataset.pkg, enabled)));
   }
 
-  function renderPricingGrid(packages, enabled) {
+  function renderPricingGrid(packages, enabled, factCheckCost) {
     const grid = document.getElementById('pricingGrid');
     if (!grid || !packages.length) return;
+    const fcc = factCheckCost || 3;
     const mid = Math.floor(packages.length / 2);
     grid.innerHTML = packages.map((p, i) => {
       const per = (p.amount / 100) / p.credits;
+      const fcPages = Math.floor(p.credits / fcc);
       const popular = i === mid;
       return '<div class="price-card' + (popular ? ' popular' : '') + '">' +
         (popular ? '<div class="ptag">Most popular</div>' : '') +
         '<div class="pname">' + esc(p.name) + '</div>' +
         '<div class="pprice">$' + (p.amount / 100).toFixed(2) + '</div>' +
-        '<div class="pcred">' + p.credits + ' page credits</div>' +
-        '<div class="pper">$' + per.toFixed(2) + ' per page</div>' +
+        '<div class="pcred">' + p.credits + ' credits</div>' +
+        '<div class="puse">' + p.credits + ' standard audits<br>or ' + fcPages + ' fact-checked audits</div>' +
+        '<div class="pper">$' + per.toFixed(2) + ' per credit</div>' +
         '<div class="pbtn"><button data-pkg="' + esc(p.id) + '">Buy ' + esc(p.name) + '</button></div>' +
       '</div>';
     }).join('');
@@ -1128,7 +1136,7 @@
   async function initCredits() {
     try {
       const pkg = await (await fetch('/api/packages')).json();
-      renderPricingGrid(pkg.packages || [], pkg.paymentsEnabled);
+      renderPricingGrid(pkg.packages || [], pkg.paymentsEnabled, pkg.factCheckCost);
       await refreshCredits();
       if (!paywall) return;
       creditsBar.style.display = 'flex';
