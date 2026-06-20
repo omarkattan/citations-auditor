@@ -235,10 +235,89 @@
     .benefits, .pricing { grid-template-columns: 1fr; }
   }
 
-  @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+  /* scan progress overlay */
+  #scanOverlay { position: fixed; inset: 0; z-index: 80; display: none;
+    align-items: center; justify-content: center; padding: 24px;
+    background: rgba(7,10,8,0.82); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+  #scanOverlay.show { display: flex; }
+  .scan-card { width: 100%; max-width: 440px; position: relative; overflow: hidden; text-align: center;
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line); border-radius: 16px; padding: 30px 28px 24px;
+    box-shadow: 0 24px 70px rgba(0,0,0,0.55); }
+  .scan-card::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--green), transparent); opacity: .55;
+    animation: scanline 3.4s linear infinite; }
+  @keyframes scanline { 0% { transform: translateY(0); } 100% { transform: translateY(460px); } }
+
+  .scan-eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--green); margin-bottom: 20px; }
+
+  .ring-wrap { position: relative; width: 148px; height: 148px; margin: 0 auto 18px; }
+  .ring-wrap svg { width: 148px; height: 148px; transform: rotate(-90deg); }
+  .ring-bg { fill: none; stroke: var(--line); stroke-width: 6; }
+  .ring-fg { fill: none; stroke: var(--green); stroke-width: 6; stroke-linecap: round;
+    filter: drop-shadow(0 0 6px rgba(46,204,113,.55));
+    stroke-dasharray: 326.726; stroke-dashoffset: 326.726; transition: stroke-dashoffset .6s ease; }
+  .ring-wrap.indeterminate svg { animation: ringspin 1.1s linear infinite; }
+  .ring-wrap.indeterminate .ring-fg { transition: none; stroke-dashoffset: 245; }
+  @keyframes ringspin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+  .ring-center { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; }
+  .ring-pct { font-family: var(--mono); font-size: 30px; font-weight: 700; color: var(--text); line-height: 1; }
+  .ring-elapsed { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 5px; }
+
+  .scan-phase { font-family: var(--mono); font-size: 13px; color: var(--green); min-height: 18px; margin-bottom: 16px; }
+
+  .scan-steps { display: flex; gap: 8px; justify-content: center; margin-bottom: 22px; }
+  .scan-step { font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); border: 1px solid var(--line); border-radius: 20px; padding: 5px 12px; transition: all .3s ease; }
+  .scan-step.active { color: var(--green); border-color: var(--green-dim); background: rgba(46,204,113,.10); }
+  .scan-step.done { color: var(--green); border-color: var(--green-dim); }
+
+  .scan-insight { border-top: 1px solid var(--line); padding-top: 18px; min-height: 76px;
+    transition: opacity .5s ease, transform .5s ease; }
+  .scan-insight.fade { opacity: 0; transform: translateY(5px); }
+  .scan-insight .tag { font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--green); }
+  .scan-insight .q { font-family: var(--sans); font-size: 15px; line-height: 1.5; color: var(--text); margin-top: 7px; }
+  .scan-hint { font-family: var(--mono); font-size: 10px; color: var(--low); margin-top: 18px; }
+
+  @media (max-width: 520px) { .scan-step { padding: 5px 9px; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cursor { animation: none; }
+    .scan-card::before, .ring-wrap.indeterminate svg { animation: none; }
+    .scan-insight, .ring-fg { transition: none; }
+  }
 </style>
 </head>
 <body>
+<div id="scanOverlay" role="dialog" aria-label="Audit in progress">
+  <div class="scan-card">
+    <div class="scan-eyebrow">// running audit</div>
+    <div class="ring-wrap" id="ringWrap">
+      <svg viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="ring-bg" cx="60" cy="60" r="52"></circle>
+        <circle class="ring-fg" id="ringFg" cx="60" cy="60" r="52"></circle>
+      </svg>
+      <div class="ring-center">
+        <div class="ring-pct" id="ringPct">-</div>
+        <div class="ring-elapsed" id="ringElapsed">0:00</div>
+      </div>
+    </div>
+    <div class="scan-phase" id="scanPhase" role="status" aria-live="polite">Starting</div>
+    <div class="scan-steps">
+      <span class="scan-step" id="stepDiscover">Discover</span>
+      <span class="scan-step" id="stepAudit">Audit</span>
+      <span class="scan-step" id="stepReport">Report</span>
+    </div>
+    <div class="scan-insight" id="scanInsight">
+      <div class="tag" id="insightTag">E-E-A-T</div>
+      <div class="q" id="insightText"></div>
+    </div>
+    <div class="scan-hint">Click outside to hide. The audit keeps running.</div>
+  </div>
+</div>
 <div class="wrap">
   <header>
     <div class="badge">Sandstorm Digital // E-E-A-T</div>
@@ -514,6 +593,77 @@
       <div class="stat"><div class="n">${d.durationSec}s</div><div class="l">Scan time</div></div>`;
   }
 
+  // ---- progress overlay -----------------------------------------------------
+  const INSIGHTS = [
+    { tag: 'E-E-A-T', q: 'Experience, Expertise, Authoritativeness, Trust: the four lenses every page is now judged through.' },
+    { tag: 'AEO', q: 'Answer engines do not rank pages, they cite sources. Be the source.' },
+    { tag: 'AIO', q: 'AI Overviews quote what they can verify. Make every claim verifiable.' },
+    { tag: 'TRUST', q: 'Trust is the only ranking signal that compounds over time.' },
+    { tag: 'AEO', q: 'In answer-engine optimization, the goal is not to be found. It is to be quoted.' },
+    { tag: 'E-E-A-T', q: 'Authority is shown, not claimed. Evidence is how you show it.' },
+    { tag: 'CLAIMS', q: 'A claim without a source is a question waiting to be asked.' },
+    { tag: 'AIO', q: 'AI reads your page like a fact-checker, not a fan.' },
+    { tag: 'E-E-A-T', q: 'Experience is the one E that content farms cannot fake.' },
+    { tag: 'CLAIMS', q: 'Specificity beats superlatives. "0.3s average load" outranks "blazing fast."' },
+    { tag: 'AEO', q: 'The pages that earn AI citations cite their own sources first.' },
+    { tag: 'TRUST', q: 'Every unsourced statistic is a small withdrawal from your credibility.' }
+  ];
+  const RING_C = 326.726;
+  let ovTimer = null, ovQuote = null, ovStart = 0, ovQi = 0, ovTotal = 0, ovDone = 0;
+  const ov = (id) => document.getElementById(id);
+
+  function ovFmt(s) { return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+  function ovTick() { ov('ringElapsed').textContent = ovFmt(Math.round((Date.now() - ovStart) / 1000)); }
+  function ovSetInsight(i) { const it = INSIGHTS[i % INSIGHTS.length]; ov('insightTag').textContent = it.tag; ov('insightText').textContent = it.q; }
+  function ovRotate() {
+    const el = ov('scanInsight');
+    el.classList.add('fade');
+    setTimeout(() => { ovSetInsight(ovQi++); el.classList.remove('fade'); }, 500);
+  }
+  function ovPhase(t) { ov('scanPhase').textContent = t; }
+  function ovStep(key) {
+    const order = ['Discover', 'Audit', 'Report'];
+    const idx = order.indexOf(key);
+    order.forEach((k, i) => {
+      const e = ov('step' + k);
+      if (!e) return;
+      e.classList.toggle('active', i === idx);
+      e.classList.toggle('done', i < idx);
+    });
+  }
+  function ovProgress(done, total) {
+    ov('ringWrap').classList.remove('indeterminate');
+    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    ov('ringPct').textContent = pct + '%';
+    ov('ringFg').style.strokeDashoffset = String(RING_C * (1 - pct / 100));
+  }
+  function ovIndeterminate() { ov('ringWrap').classList.add('indeterminate'); ov('ringPct').textContent = '-'; }
+
+  function overlayShow(mode) {
+    ovStart = Date.now(); ovQi = 0; ovTotal = 0; ovDone = 0;
+    ovPhase('Starting'); ovStep('Discover');
+    ov('ringElapsed').textContent = '0:00';
+    ovSetInsight(ovQi++);
+    if (mode === 'indeterminate') ovIndeterminate(); else ovProgress(0, 1);
+    ov('scanOverlay').classList.add('show');
+    clearInterval(ovTimer); ovTimer = setInterval(ovTick, 1000);
+    clearInterval(ovQuote); ovQuote = setInterval(ovRotate, 5200);
+  }
+  function overlayHide() {
+    ov('scanOverlay').classList.remove('show');
+    clearInterval(ovTimer); clearInterval(ovQuote); ovTimer = ovQuote = null;
+  }
+  function overlayFinish() {
+    ovProgress(1, 1); ovPhase('Done');
+    ['Discover', 'Audit', 'Report'].forEach((k) => {
+      const e = ov('step' + k); if (e) { e.classList.remove('active'); e.classList.add('done'); }
+    });
+    clearInterval(ovQuote); ovQuote = null;
+    setTimeout(overlayHide, 700);
+  }
+  ov('scanOverlay').addEventListener('click', (e) => { if (e.target === ov('scanOverlay')) overlayHide(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlayHide(); });
+
   function run() {
     const url = document.getElementById('url').value.trim();
     if (!url) { document.getElementById('url').focus(); return; }
@@ -533,6 +683,8 @@
     showDownloads(false);
     runBtn.disabled = true;
     runBtn.textContent = 'Auditing...';
+    overlayShow('indeterminate');
+    ovPhase('Discovering pages'); ovStep('Discover');
 
     const params = new URLSearchParams({ url, source, maxPages, findSources: 'true' });
     if (source === 'crawl' && pathPrefix) params.set('path', pathPrefix);
@@ -540,11 +692,18 @@
 
     const es = new EventSource('/api/scan/stream?' + params.toString());
 
-    es.addEventListener('status', (e) => log('> ' + JSON.parse(e.data).message, 'dim'));
+    es.addEventListener('status', (e) => {
+      const d = JSON.parse(e.data);
+      log('> ' + d.message, 'dim');
+      if (d.total) { ovStep('Audit'); ovPhase('Auditing page ' + d.index + ' of ' + d.total); }
+    });
     es.addEventListener('pages', (e) => {
       const d = JSON.parse(e.data);
       log('> found ' + d.count + ' page' + (d.count === 1 ? '' : 's') + (d.capped ? ' (limited to your credits)' : ''), 'ok');
       renderIndex(d.urls || []);
+      ovTotal = d.count; ovDone = 0;
+      ovStep('Audit'); ovProgress(0, ovTotal);
+      ovPhase('Auditing ' + d.count + ' page' + (d.count === 1 ? '' : 's'));
     });
     es.addEventListener('page', (e) => {
       const page = JSON.parse(e.data);
@@ -553,10 +712,13 @@
       scanData.push(page);
       updateIndex(page);
       renderPage(page);
+      ovDone++; ovProgress(ovDone, ovTotal || scanData.length);
     });
     es.addEventListener('done', (e) => {
       const d = JSON.parse(e.data);
       log('> done in ' + d.durationSec + 's', 'ok');
+      ovPhase('Compiling report'); ovStep('Report');
+      overlayFinish();
       renderSummary(d);
       if (scanData.length) showDownloads(true);
       if (d.balance !== undefined) setBalance(d.balance);
@@ -569,6 +731,7 @@
       let needCredits = false;
       try { if (e.data) { const d = JSON.parse(e.data); msg = d.message; needCredits = d.needCredits; } } catch {}
       log('> error: ' + msg, 'err');
+      overlayHide();
       if (needCredits) showBuyPanel();
       es.close();
       runBtn.disabled = false;
@@ -594,6 +757,8 @@
     scanMeta = { url, source: 'paste' };
     runBtn.disabled = true;
     runBtn.textContent = 'Auditing...';
+    overlayShow('indeterminate');
+    ovStep('Audit'); ovPhase('Auditing content');
 
     const started = Date.now();
     log('> auditing pasted text', 'dim');
@@ -606,11 +771,13 @@
       const page = await res.json();
       if (res.status === 402) {
         log('> ' + (page.error || 'Out of credits'), 'err');
+        overlayHide();
         showBuyPanel();
         return;
       }
       if (!res.ok && !page.url) {
         log('> error: ' + (page.error || 'audit failed'), 'err');
+        overlayHide();
         return;
       }
       const claims = page.claims || [];
@@ -629,9 +796,12 @@
       });
       if (scanData.length) showDownloads(true);
       if (page.balance !== undefined) setBalance(page.balance);
+      ovPhase('Compiling report'); ovStep('Report');
+      overlayFinish();
       log('> done', 'ok');
     } catch (err) {
       log('> error: ' + err.message, 'err');
+      overlayHide();
     } finally {
       runBtn.disabled = false;
       runBtn.textContent = 'Run audit';
