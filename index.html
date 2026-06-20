@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
 <head>
@@ -236,6 +235,25 @@
     .benefits, .pricing { grid-template-columns: 1fr; }
   }
 
+  /* fact-check toggle */
+  .fc-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+  .fc-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text); user-select: none; }
+  .fc-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .fc-box { width: 34px; height: 19px; border-radius: 20px; background: var(--panel-2); border: 1px solid var(--line); position: relative; transition: all .2s ease; flex: 0 0 auto; }
+  .fc-box::after { content: ''; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--muted); transition: all .2s ease; }
+  .fc-toggle input:checked + .fc-box { background: var(--green-dim); border-color: var(--green); }
+  .fc-toggle input:checked + .fc-box::after { transform: translateX(15px); background: var(--green); }
+  .fc-toggle input:focus-visible + .fc-box { outline: 2px solid var(--green); outline-offset: 2px; }
+  .fc-hint { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+
+  /* finding-type tags */
+  .tag.fnd-bad { background: rgba(255,107,107,0.15); color: var(--high); }
+  .tag.fnd-stale { background: rgba(245,166,35,0.15); color: var(--med); }
+  .tag.fnd-unsub { background: rgba(46,204,113,0.12); color: var(--green); }
+  .tag.fnd-verify { background: rgba(122,162,255,0.16); color: #8ab0ff; }
+  .tag.fnd-conf { background: var(--panel-2); color: var(--muted); }
+  .meta.cur { color: var(--text); border-left: 2px solid var(--med); padding-left: 8px; }
+
   /* scan progress overlay */
   #scanOverlay { position: fixed; inset: 0; z-index: 80; display: none;
     align-items: center; justify-content: center; padding: 24px;
@@ -381,6 +399,15 @@
         <button class="run" id="run">Run audit</button>
       </div>
     </div>
+
+    <div class="fc-row">
+      <label class="fc-toggle">
+        <input type="checkbox" id="factCheck">
+        <span class="fc-box" aria-hidden="true"></span>
+        <span>Verify accuracy and recency (fact-check)</span>
+      </label>
+      <span class="fc-hint">Also checks facts, stats, dates and prices against current sources. Slower, uses more web searches.</span>
+    </div>
   </div>
 
   <div class="term" id="term"></div>
@@ -511,6 +538,8 @@
     downloadsBottom.style.display = d;
   }
   const runBtn = document.getElementById('run');
+  const factCheckEl = document.getElementById('factCheck');
+  let factCheckActive = false;
   let pageIndex = {};
   let scanData = [];
   let scanMeta = {};
@@ -539,22 +568,37 @@
       <div class="u">${esc(page.url)}</div>
       ${page.title ? `<div class="t">${esc(page.title)}</div>` : ''}`;
     if (page.error) head += `<div class="t err" style="color:var(--high)">${esc(page.error)}</div>`;
-    else if (!claims.length) head += `<div class="clean">No unsubstantiated claims found.</div>`;
+    else if (!claims.length) head += `<div class="clean">No ${factCheckActive ? 'issues' : 'unsubstantiated claims'} found.</div>`;
     head += `</div>`;
 
     const body = claims.map((c) => {
+      const ft = (c.finding_type || 'unsubstantiated').toLowerCase();
+      const fm = ft === 'inaccurate' ? { label: 'Inaccurate', cls: 'fnd-bad' }
+        : ft === 'outdated' ? { label: 'Outdated', cls: 'fnd-stale' }
+        : { label: 'Unsubstantiated', cls: 'fnd-unsub' };
+      const isFact = fm.cls !== 'fnd-unsub';
+      const conf = (c.confidence || '').toLowerCase();
+      const confTag = conf === 'low'
+        ? `<span class="tag fnd-verify">worth verifying</span>`
+        : (isFact && conf ? `<span class="tag fnd-conf">${esc(conf)} confidence</span>` : '');
+      const curFact = (c.current_fact && c.current_fact.trim())
+        ? `<div class="meta cur"><b>Current sources:</b> ${esc(c.current_fact)}</div>` : '';
+      const srcLabel = isFact ? 'Source' : 'Citation';
       const src = c.suggested_source && c.suggested_source.url
-        ? `<a class="src-link" href="${esc(c.suggested_source.url)}" target="_blank" rel="noopener">Citation: ${esc(c.suggested_source.title || c.suggested_source.url)}</a>`
-        : `<div class="src-none">No credible source found yet. Substantiate with: ${esc(c.recommendation)}</div>`;
+        ? `<a class="src-link" href="${esc(c.suggested_source.url)}" target="_blank" rel="noopener">${srcLabel}: ${esc(c.suggested_source.title || c.suggested_source.url)}</a>`
+        : `<div class="src-none">${isFact ? 'No definitive source found - verify before relying on this.' : 'No credible source found yet. Substantiate with: ' + esc(c.recommendation)}</div>`;
       return `<div class="claim">
         <div class="tags">
+          <span class="tag ${fm.cls}">${fm.label}</span>
           <span class="tag ${sevClass(c.severity)}">${esc(c.severity || 'low')}</span>
+          ${confTag}
           <span class="tag">${esc(c.claim_type || 'claim')}</span>
           <span class="tag pillar">${esc(c.eeat || 'Trustworthiness')}</span>
         </div>
         <p class="quote">${esc(c.claim)}</p>
         ${c.context ? `<div class="meta">${esc(c.context)}</div>` : ''}
         <div class="meta"><b>Issue:</b> ${esc(c.issue)}</div>
+        ${curFact}
         <div class="fix"><b>Fix:</b> ${esc(c.recommendation)}</div>
         ${src}
       </div>`;
@@ -763,6 +807,8 @@
     ovPhase('Discovering pages'); ovStep('Discover'); ovActCycle(DISCOVERY_ACTS);
 
     const params = new URLSearchParams({ url, source, maxPages, findSources: 'true' });
+    factCheckActive = !!(factCheckEl && factCheckEl.checked);
+    if (factCheckActive) params.set('factCheck', 'true');
     if (source === 'crawl' && pathPrefix) params.set('path', pathPrefix);
     if (accessCode) params.set('code', accessCode);
 
@@ -850,10 +896,11 @@
     const started = Date.now();
     log('> auditing pasted text', 'dim');
     try {
-      const res = await fetch('/api/audit-text', {
+      factCheckActive = !!(factCheckEl && factCheckEl.checked);
+    const res = await fetch('/api/audit-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, url, findSources: true, code: accessCode })
+        body: JSON.stringify({ text, url, findSources: true, factCheck: factCheckActive, code: accessCode })
       });
       const page = await res.json();
       if (res.status === 402) {
@@ -901,12 +948,15 @@
     scanData.forEach((p) => (p.claims || []).forEach((c) => rows.push([
       p.url || '',
       p.title || '',
+      c.finding_type || 'unsubstantiated',
+      c.confidence || '',
       c.severity || '',
       c.claim_type || '',
       c.eeat || '',
       c.claim || '',
       c.context || '',
       c.issue || '',
+      c.current_fact || '',
       c.recommendation || '',
       (c.suggested_source && c.suggested_source.title) || '',
       (c.suggested_source && c.suggested_source.url) || ''
@@ -932,7 +982,7 @@
   }
 
   function exportCsv() {
-    const header = ['Page URL', 'Page title', 'Severity', 'Type', 'E-E-A-T', 'Claim', 'Context', 'Issue', 'Recommendation', 'Suggested source', 'Source URL'];
+    const header = ['Page URL', 'Page title', 'Finding', 'Confidence', 'Severity', 'Type', 'E-E-A-T', 'Claim', 'Context', 'Issue', 'Current sources say', 'Recommendation', 'Suggested source', 'Source URL'];
     const cell = (c) => '"' + (c == null ? '' : String(c)).replace(/"/g, '""') + '"';
     const csv = [header].concat(claimRows()).map((r) => r.map(cell).join(',')).join('\r\n');
     downloadBlob('\ufeff' + csv, fileBase() + '.csv', 'text/csv;charset=utf-8');
@@ -975,9 +1025,13 @@
         return;
       }
       claims.forEach((c, i) => {
-        line((i + 1) + '. [' + (c.severity || '').toUpperCase() + '] ' + (c.claim || ''), 10, [20, 20, 20], 1);
+        const ft = (c.finding_type || 'unsubstantiated').toLowerCase();
+        const ftLabel = ft === 'inaccurate' ? 'INACCURATE' : ft === 'outdated' ? 'OUTDATED' : 'UNSUBSTANTIATED';
+        const confTxt = (c.confidence || '').toLowerCase() === 'low' ? ' (worth verifying)' : '';
+        line((i + 1) + '. [' + ftLabel + confTxt + '] [' + (c.severity || '').toUpperCase() + '] ' + (c.claim || ''), 10, [20, 20, 20], 1);
         line('Pillar: ' + (c.eeat || '-') + '   Type: ' + (c.claim_type || '-'), 8, [120, 120, 120], 1);
         if (c.issue) line('Issue: ' + c.issue, 9, [70, 70, 70], 1);
+        if (c.current_fact && c.current_fact.trim()) line('Current sources: ' + c.current_fact, 9, [120, 90, 20], 1);
         if (c.recommendation) line('Fix: ' + c.recommendation, 9, [70, 70, 70], 1);
         const src = c.suggested_source && c.suggested_source.url;
         line(src ? 'Source: ' + c.suggested_source.url : 'Source: none found yet', 8, [10, 122, 63], 6);
