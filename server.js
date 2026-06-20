@@ -1,6 +1,7 @@
 // server.js
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 const { discover } = require('./discover');
 const { auditPage, auditText, diagnose, extractText } = require('./audit');
 const { fetchHtml, fetchDiagnostic } = require('./fetchpage');
@@ -10,9 +11,24 @@ const payments = require('./payments');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const ADMIN_KEY = process.env.ADMIN_KEY || 'sandstorm2026';
+// No insecure default: if ADMIN_KEY is unset, admin endpoints are disabled.
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
 const MAX_PAGES_CAP = 25;
 const FREE_PAGES = parseInt(process.env.FREE_PAGES || '3', 10);
+
+if (!ADMIN_KEY) {
+  console.warn('[admin] ADMIN_KEY is not set - all admin endpoints are disabled until you set it.');
+}
+
+// Constant-time admin check. Fails closed when no key is configured. Comparing
+// SHA-256 digests keeps it constant-time and avoids leaking key length.
+function adminOk(req) {
+  if (!ADMIN_KEY) return false;
+  const provided = String((req.query && req.query.key) || '');
+  const a = crypto.createHash('sha256').update(provided).digest();
+  const b = crypto.createHash('sha256').update(ADMIN_KEY).digest();
+  return crypto.timingSafeEqual(a, b);
+}
 
 // Render runs behind a proxy; needed so req.ip is the real client IP.
 app.set('trust proxy', true);
@@ -24,6 +40,13 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     const event = payments.verifyWebhook(req.body, req.headers['stripe-signature']);
     if (event.type === 'checkout.session.completed') {
       await payments.fulfillSession(event.data.object.id);
+    } else if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
+      const obj = event.data.object || {};
+      const pi = typeof obj.payment_intent === 'string' ? obj.payment_intent : (obj.payment_intent && obj.payment_intent.id) || null;
+      if (pi) {
+        const voided = await payments.voidByPaymentIntent(pi);
+        if (voided.length) console.log(`[webhook] ${event.type}: voided code(s)`, voided.map((v) => v.code).join(', '));
+      }
     }
     res.json({ received: true });
   } catch (err) {
@@ -34,6 +57,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 // Serve the single-page UI from the repo root.
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/success', (_req, res) => res.sendFile(path.join(__dirname, 'success.html')));
+app.get('/bot', (_req, res) => res.sendFile(path.join(__dirname, 'bot.html')));
 
 app.use(express.json({ limit: '2mb' }));
 
@@ -101,7 +125,7 @@ app.get('/api/checkout/result', async (req, res) => {
 // Admin: mint a credit code without payment (testing, comps, refunds).
 // e.g. /api/admin/grant?key=ADMIN_KEY&credits=1000
 app.get('/api/admin/grant', async (req, res) => {
-  if (req.query.key !== ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  if (!adminOk(req)) return res.status(401).json({ error: 'Unauthorized' });
   if (!db.enabled()) return res.status(400).json({ error: 'Database not configured.' });
   const credits = Math.max(1, Math.min(parseInt(req.query.credits || '500', 10), 100000));
   const result = await db.createCode(credits, 'admin-grant');
@@ -152,7 +176,7 @@ app.post('/api/audit-text', async (req, res) => {
 // Diagnostic probe: makes one minimal API call and returns the raw error
 // detail so we can see what is actually failing. Guarded by the admin key.
 app.get('/api/diag', async (req, res) => {
-  if (req.query.key !== ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  if (!adminOk(req)) return res.status(401).json({ error: 'Unauthorized' });
   const result = await diagnose();
   result.node = process.version;
   res.json(result);
@@ -161,7 +185,7 @@ app.get('/api/diag', async (req, res) => {
 // Fetch diagnostic: shows how a given URL is retrieved (direct vs Browserless)
 // and how much real text comes out. Guarded by the admin key.
 app.get('/api/fetch-test', async (req, res) => {
-  if (req.query.key !== ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  if (!adminOk(req)) return res.status(401).json({ error: 'Unauthorized' });
   const url = (req.query.url || '').trim();
   if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Provide ?url=https://...' });
 
@@ -299,7 +323,7 @@ function escHtml(v) {
 }
 
 app.get('/admin/scans', async (req, res) => {
-  if (req.query.key !== ADMIN_KEY) {
+  if (!adminOk(req)) {
     return res.status(401).send('Unauthorized');
   }
 
@@ -362,7 +386,7 @@ app.get('/admin/scans', async (req, res) => {
 
 // CSV of every tested URL, for the admin.
 app.get('/admin/urls.csv', async (req, res) => {
-  if (req.query.key !== ADMIN_KEY) return res.status(401).send('Unauthorized');
+  if (!adminOk(req)) return res.status(401).send('Unauthorized');
   const { rows } = await getPages();
   const header = ['Timestamp', 'Tested URL', 'Source', 'Claims', 'High severity', 'From'];
   const csv = [header]
