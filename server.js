@@ -123,6 +123,7 @@ app.get('/api/credits', async (req, res) => {
 });
 
 app.get('/api/packages', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
   res.json({ paymentsEnabled: payments.enabled(), packages: Object.values(payments.PACKAGES), factCheckCost: FACTCHECK_COST, freePages: FREE_PAGES });
 });
 
