@@ -39,11 +39,8 @@ async function init() {
       total INTEGER NOT NULL DEFAULT 0,
       used INTEGER NOT NULL DEFAULT 0,
       stripe_session_id TEXT UNIQUE,
-      payment_intent TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
-  // Migration for tables created before payment_intent existed.
-  await p.query('ALTER TABLE credits ADD COLUMN IF NOT EXISTS payment_intent TEXT');
   await p.query(`
     CREATE TABLE IF NOT EXISTS free_usage (
       ip TEXT PRIMARY KEY,
@@ -104,7 +101,7 @@ async function createCode(credits, email) {
 
 // Idempotent on the Stripe session id: returns the existing code for a session
 // if one was already created, otherwise creates it.
-async function createCodeForSession(sessionId, email, credits, paymentIntent) {
+async function createCodeForSession(sessionId, email, credits) {
   const p = getPool();
   if (!p) return null;
   const existing = await p.query('SELECT code, total, used FROM credits WHERE stripe_session_id = $1', [sessionId]);
@@ -114,28 +111,15 @@ async function createCodeForSession(sessionId, email, credits, paymentIntent) {
   }
   const code = genCode();
   await p.query(
-    'INSERT INTO credits (code, email, total, used, stripe_session_id, payment_intent) VALUES ($1, $2, $3, 0, $4, $5)',
-    [code, email || null, credits, sessionId, paymentIntent || null]
+    'INSERT INTO credits (code, email, total, used, stripe_session_id) VALUES ($1, $2, $3, 0, $4)',
+    [code, email || null, credits, sessionId]
   );
   return { code, credits, balance: credits };
-}
-
-// Void a code on refund/chargeback by zeroing its remaining balance (used set to
-// total). Matched via the Stripe payment_intent stored at creation. Returns the
-// affected code(s) so the caller can log.
-async function voidByPaymentIntent(paymentIntent) {
-  const p = getPool();
-  if (!p || !paymentIntent) return [];
-  const r = await p.query(
-    'UPDATE credits SET used = total WHERE payment_intent = $1 RETURNING code, total',
-    [paymentIntent]
-  );
-  return r.rows.map((row) => ({ code: row.code, voided: row.total }));
 }
 
 module.exports = {
   enabled, init, genCode,
   getCodeBalance, consumeCode,
   getFreeRemaining, consumeFree,
-  createCode, createCodeForSession, voidByPaymentIntent
+  createCode, createCodeForSession
 };
