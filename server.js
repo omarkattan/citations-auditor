@@ -16,6 +16,9 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 const MAX_PAGES_CAP = 25;
 const FREE_PAGES = parseInt(process.env.FREE_PAGES || '3', 10);
+// A fact-checked page costs more to run (more web searches and tokens), so it
+// spends more credits. Keeps margin healthy on the premium operation.
+const FACTCHECK_COST = parseInt(process.env.FACTCHECK_CREDIT_COST || '3', 10);
 
 if (!ADMIN_KEY) {
   console.warn('[admin] ADMIN_KEY is not set - all admin endpoints are disabled until you set it.');
@@ -120,7 +123,7 @@ app.get('/api/credits', async (req, res) => {
 });
 
 app.get('/api/packages', (_req, res) => {
-  res.json({ paymentsEnabled: payments.enabled(), packages: Object.values(payments.PACKAGES) });
+  res.json({ paymentsEnabled: payments.enabled(), packages: Object.values(payments.PACKAGES), factCheckCost: FACTCHECK_COST, freePages: FREE_PAGES });
 });
 
 app.post('/api/checkout', async (req, res) => {
@@ -157,12 +160,14 @@ app.get('/api/admin/grant', async (req, res) => {
 app.post('/api/audit-text', async (req, res) => {
   const { text, url, findSources, factCheck } = req.body || {};
   if (!text || !text.trim()) return res.status(400).json({ error: 'No text provided.' });
+  const pageCost = factCheck === true ? FACTCHECK_COST : 1;
 
   const account = await resolveAccount(req);
   if (account.paywall) {
     if (account.invalid) return res.status(402).json({ error: 'That access code is not valid.' });
-    if (account.balance <= 0) {
-      return res.status(402).json({ error: account.type === 'free' ? 'Free trial used up. Buy credits to continue.' : 'No credits left on that code.' });
+    if (account.balance < pageCost) {
+      const need = pageCost > 1 ? `A fact-checked page needs ${pageCost} credits. ` : '';
+      return res.status(402).json({ error: need + (account.type === 'free' ? 'Free trial used up. Buy credits to continue.' : 'Not enough credits on that code.') });
     }
   }
 
@@ -171,7 +176,7 @@ app.post('/api/audit-text', async (req, res) => {
   try {
     const result = await auditText(text, { url: label, findSources: findSources !== false, factCheck: factCheck === true });
     const claims = result.claims || [];
-    if (account.paywall && !result.error) await chargeAccount(account, 1);
+    if (account.paywall && !result.error) await chargeAccount(account, pageCost);
     await logScan({
       url: label,
       source: 'paste',
@@ -187,13 +192,13 @@ app.post('/api/audit-text', async (req, res) => {
       high: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
       root: label
     }]);
-    await logCost(label, 'paste', 1, {
+    await logCost(label, factCheck === true ? 'paste-factcheck' : 'paste', 1, {
       inputTokens: (result.usage && result.usage.input_tokens) || 0,
       outputTokens: (result.usage && result.usage.output_tokens) || 0,
       webSearches: (result.usage && result.usage.web_searches) || 0,
       browserlessRenders: 0
     });
-    if (account.paywall) result.balance = Math.max(0, account.balance - (result.error ? 0 : 1));
+    if (account.paywall) result.balance = Math.max(0, account.balance - (result.error ? 0 : pageCost));
     res.json(result);
   } catch (err) {
     res.status(500).json({ url: label, error: `Audit failed: ${err.message}`, claims: [] });
@@ -266,6 +271,7 @@ app.get('/api/scan/stream', async (req, res) => {
   }
 
   const started = Date.now();
+  const pageCost = factCheck ? FACTCHECK_COST : 1;
   try {
     // Resolve the paying account and gate on balance.
     const account = await resolveAccount(req);
@@ -274,9 +280,10 @@ app.get('/api/scan/stream', async (req, res) => {
         send('error', { message: 'That access code is not valid.' });
         return res.end();
       }
-      if (account.balance <= 0) {
+      if (account.balance < pageCost) {
+        const need = pageCost > 1 ? `A fact-checked page needs ${pageCost} credits. ` : '';
         send('error', {
-          message: account.type === 'free' ? 'Free trial used up. Buy credits to continue.' : 'No credits left on that code.',
+          message: need + (account.type === 'free' ? 'Free trial used up. Buy credits to continue.' : 'Not enough credits left on that code.'),
           needCredits: true
         });
         return res.end();
@@ -291,11 +298,14 @@ app.get('/api/scan/stream', async (req, res) => {
       return res.end();
     }
 
-    // Never audit more pages than the account can pay for.
+    // Never audit more pages than the account can pay for (cost varies by mode).
     let capped = false;
-    if (account.paywall && pages.length > account.balance) {
-      pages = pages.slice(0, account.balance);
-      capped = true;
+    if (account.paywall) {
+      const affordable = Math.floor(account.balance / pageCost);
+      if (pages.length > affordable) {
+        pages = pages.slice(0, affordable);
+        capped = true;
+      }
     }
 
     send('pages', { count: pages.length, urls: pages, capped });
@@ -316,7 +326,7 @@ app.get('/api/scan/stream', async (req, res) => {
       const high = claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length;
       totalClaims += claims.length;
       highSeverity += high;
-      if (!result.error) charged += 1; // only charge pages that actually ran
+      if (!result.error) charged += pageCost; // only charge pages that actually ran
       if (result.usage) {
         usage.inputTokens += result.usage.input_tokens || 0;
         usage.outputTokens += result.usage.output_tokens || 0;
@@ -340,7 +350,7 @@ app.get('/api/scan/stream', async (req, res) => {
       durationSec
     });
     await logPages(pageRows);
-    await logCost(url, source, pages.length, usage);
+    await logCost(url, factCheck ? source + '-factcheck' : source, pages.length, usage);
 
     const done = { pagesScanned: pages.length, totalClaims, highSeverity, durationSec, capped };
     if (account.paywall) done.balance = Math.max(0, account.balance - charged);
