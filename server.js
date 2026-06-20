@@ -8,6 +8,7 @@ const { fetchHtml, fetchDiagnostic } = require('./fetchpage');
 const { logScan, getScans, logPages, getPages, ensureTabs, storageMode } = require('./sheets');
 const db = require('./db');
 const payments = require('./payments');
+const { computeCost, RATES } = require('./cost');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,6 +29,26 @@ function adminOk(req) {
   const a = crypto.createHash('sha256').update(provided).digest();
   const b = crypto.createHash('sha256').update(ADMIN_KEY).digest();
   return crypto.timingSafeEqual(a, b);
+}
+
+// Compute and persist the estimated cost of a scan (no-op without a database).
+async function logCost(url, source, pages, usage) {
+  try {
+    if (!db.enabled()) return;
+    const c = computeCost(usage);
+    await db.logScanCost({
+      url,
+      source,
+      pages,
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      web_searches: usage.webSearches,
+      browserless_renders: usage.browserlessRenders,
+      est_cost: c.total
+    });
+  } catch (e) {
+    console.error('logCost failed:', e.message);
+  }
 }
 
 // Render runs behind a proxy; needed so req.ip is the real client IP.
@@ -166,6 +187,12 @@ app.post('/api/audit-text', async (req, res) => {
       high: claims.filter((c) => (c.severity || '').toLowerCase() === 'high').length,
       root: label
     }]);
+    await logCost(label, 'paste', 1, {
+      inputTokens: (result.usage && result.usage.input_tokens) || 0,
+      outputTokens: (result.usage && result.usage.output_tokens) || 0,
+      webSearches: (result.usage && result.usage.web_searches) || 0,
+      browserlessRenders: 0
+    });
     if (account.paywall) result.balance = Math.max(0, account.balance - (result.error ? 0 : 1));
     res.json(result);
   } catch (err) {
@@ -276,6 +303,7 @@ app.get('/api/scan/stream', async (req, res) => {
     let highSeverity = 0;
     let charged = 0;
     const pageRows = [];
+    const usage = { inputTokens: 0, outputTokens: 0, webSearches: 0, browserlessRenders: 0 };
 
     for (let i = 0; i < pages.length; i++) {
       if (closed) break;
@@ -288,6 +316,12 @@ app.get('/api/scan/stream', async (req, res) => {
       totalClaims += claims.length;
       highSeverity += high;
       if (!result.error) charged += 1; // only charge pages that actually ran
+      if (result.usage) {
+        usage.inputTokens += result.usage.input_tokens || 0;
+        usage.outputTokens += result.usage.output_tokens || 0;
+        usage.webSearches += result.usage.web_searches || 0;
+      }
+      usage.browserlessRenders += result.browserless || 0;
       pageRows.push({ pageUrl: result.url, source, claims: claims.length, high, root: url });
 
       send('page', result);
@@ -305,6 +339,7 @@ app.get('/api/scan/stream', async (req, res) => {
       durationSec
     });
     await logPages(pageRows);
+    await logCost(url, source, pages.length, usage);
 
     const done = { pagesScanned: pages.length, totalClaims, highSeverity, durationSec, capped };
     if (account.paywall) done.balance = Math.max(0, account.balance - charged);
@@ -404,7 +439,7 @@ function adminNav(req, active) {
   const k = encodeURIComponent(req.query.key || '');
   const link = (href, label, id) =>
     id === active ? `<b>${label}</b>` : `<a href="${href}?key=${k}">${label}</a>`;
-  return `<p class="note">${link('/admin/scans', 'URLs &amp; Scans', 'scans')} &middot; ${link('/admin/credits', 'Users &amp; Credits', 'credits')}</p>`;
+  return `<p class="note">${link('/admin/scans', 'URLs &amp; Scans', 'scans')} &middot; ${link('/admin/credits', 'Users &amp; Credits', 'credits')} &middot; ${link('/admin/costs', 'Costs', 'costs')}</p>`;
 }
 
 // Users and their credit balances.
@@ -465,6 +500,79 @@ app.get('/admin/credits', async (req, res) => {
   const content = `${adminNav(req, 'credits')}
     <h1>Users &amp; Credits</h1>
     ${summary}
+    ${table}`;
+  res.send(adminShell(content));
+});
+
+// Spend (estimated) and how it compares to revenue.
+app.get('/admin/costs', async (req, res) => {
+  if (!adminOk(req)) return res.status(401).send('Unauthorized');
+  if (!db.enabled()) {
+    return res.send(adminShell(adminNav(req, 'costs') + '<p>Cost tracking needs DATABASE_URL set.</p>'));
+  }
+
+  const { totals, recent } = await db.getCostSummary(50);
+  const t = totals || {};
+  const num = (v) => Number(v || 0);
+  const money = (v) => '$' + num(v).toFixed(2);
+
+  // Estimated revenue: match each non-voided Stripe code's credits to a package price.
+  const priceByCredits = {};
+  Object.values(payments.PACKAGES).forEach((p) => { priceByCredits[p.credits] = p.amount; });
+  const credits = await db.listCredits();
+  const revenueCents = credits
+    .filter((c) => c.source === 'stripe' && !c.voided)
+    .reduce((a, c) => a + (priceByCredits[c.total] || 0), 0);
+  const revenue = revenueCents / 100;
+  const totalCost = num(t.total_cost);
+  const margin = revenue - totalCost;
+  const marginPct = revenue > 0 ? Math.round((margin / revenue) * 100) : null;
+
+  const fmtDate = (d) => { try { return new Date(d).toISOString().slice(0, 16).replace('T', ' '); } catch { return escHtml(String(d)); } };
+
+  const cards = `
+    <div class="cards">
+      <div class="card"><div class="n">${money(totalCost)}</div><div class="l">Est. cost (all)</div></div>
+      <div class="card"><div class="n">${money(t.last7_cost)}</div><div class="l">Cost (7 days)</div></div>
+      <div class="card"><div class="n">${money(t.last1_cost)}</div><div class="l">Cost (24h)</div></div>
+      <div class="card"><div class="n">${money(revenue)}</div><div class="l">Est. revenue</div></div>
+      <div class="card"><div class="n">${money(margin)}</div><div class="l">Est. margin${marginPct == null ? '' : ' (' + marginPct + '%)'}</div></div>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="n">${num(t.scans)}</div><div class="l">Scans</div></div>
+      <div class="card"><div class="n">${num(t.pages)}</div><div class="l">Pages</div></div>
+      <div class="card"><div class="n">${num(t.input_tokens).toLocaleString()}</div><div class="l">Input tokens</div></div>
+      <div class="card"><div class="n">${num(t.output_tokens).toLocaleString()}</div><div class="l">Output tokens</div></div>
+      <div class="card"><div class="n">${num(t.web_searches)}</div><div class="l">Web searches</div></div>
+      <div class="card"><div class="n">${num(t.browserless_renders)}</div><div class="l">Browserless</div></div>
+    </div>`;
+
+  const rows = (recent || []).map((r) => `<tr>
+      <td>${fmtDate(r.created_at)}</td>
+      <td class="u">${escHtml(r.url)}</td>
+      <td>${escHtml(r.source)}</td>
+      <td>${r.pages}</td>
+      <td>${num(r.input_tokens).toLocaleString()}</td>
+      <td>${num(r.output_tokens).toLocaleString()}</td>
+      <td>${r.web_searches}</td>
+      <td>${r.browserless_renders}</td>
+      <td><b>${money(r.est_cost)}</b></td>
+    </tr>`).join('');
+
+  const table = rows
+    ? `<table>
+        <thead><tr><th>Time</th><th>URL</th><th>Source</th><th>Pages</th><th>In tok</th><th>Out tok</th><th>Search</th><th>Browserless</th><th>Est. cost</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`
+    : '<p>No scans recorded yet.</p>';
+
+  const note = `Rates: $${RATES.inputPerMTok}/$${RATES.outputPerMTok} per Mtok in/out, $${RATES.perSearch}/search, $${RATES.perBrowserless}/Browserless render. Revenue and Browserless cost are estimates. Tune rates with env vars.`;
+
+  const content = `${adminNav(req, 'costs')}
+    <h1>Costs</h1>
+    ${cards}
+    <p class="note">${escHtml(note)}</p>
+    <h1 style="margin-top:32px">Recent scans</h1>
     ${table}`;
   res.send(adminShell(content));
 });

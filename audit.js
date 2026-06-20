@@ -130,7 +130,13 @@ async function callClaude(client, userContent, useWebSearch, attempt = 0) {
   try {
     const stream = client.messages.stream(request);
     const finalMessage = await stream.finalMessage();
-    return collectText(finalMessage.content);
+    const u = finalMessage.usage || {};
+    const usage = {
+      input_tokens: u.input_tokens || 0,
+      output_tokens: u.output_tokens || 0,
+      web_searches: (u.server_tool_use && u.server_tool_use.web_search_requests) || 0
+    };
+    return { text: collectText(finalMessage.content), usage };
   } catch (err) {
     if (isTransient(err) && attempt < 2) {
       await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
@@ -138,6 +144,14 @@ async function callClaude(client, userContent, useWebSearch, attempt = 0) {
     }
     throw err;
   }
+}
+
+const ZERO_USAGE = { input_tokens: 0, output_tokens: 0, web_searches: 0 };
+function addUsage(acc, u) {
+  acc.input_tokens += (u && u.input_tokens) || 0;
+  acc.output_tokens += (u && u.output_tokens) || 0;
+  acc.web_searches += (u && u.web_searches) || 0;
+  return acc;
 }
 
 async function auditPage(url, { apiKey, findSources = true } = {}) {
@@ -157,12 +171,14 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
   }
 
   let { title, text } = extractText(fetched.html);
+  let browserless = fetched.via === 'browserless' ? 1 : 0;
 
   // If a direct fetch returned little article text, the page is probably
   // JavaScript-rendered or a shell. If Browserless is available, render it
   // properly and retry. (A real article runs to thousands of characters.)
   if ((!text || text.length < 600) && fetched.via === 'direct' && browserlessConfigured()) {
     const rendered = await fetchViaBrowserless(url);
+    browserless += 1;
     if (rendered.ok) {
       const ex = extractText(rendered.html);
       if (ex.text && ex.text.length > (text || '').length) {
@@ -173,10 +189,12 @@ async function auditPage(url, { apiKey, findSources = true } = {}) {
   }
 
   if (!text || text.length < 120) {
-    return { url, title, error: 'Too little readable text to audit.', claims: [] };
+    return { url, title, error: 'Too little readable text to audit.', claims: [], browserless };
   }
 
-  return runClaims(url, title, text, findSources, key);
+  const result = await runClaims(url, title, text, findSources, key);
+  result.browserless = browserless;
+  return result;
 }
 
 // Audit text the user pasted in (used when a site blocks automated fetches).
@@ -209,22 +227,25 @@ async function runClaims(url, title, text, findSources, apiKey) {
 
   const client = makeClient(key, { maxRetries: 3, timeout: 120000 });
   const userContent = `Page URL: ${url}\nPage title: ${title}\n\nPage text:\n"""\n${text}\n"""`;
+  const usage = { ...ZERO_USAGE };
 
   try {
-    const raw = await callClaude(client, userContent, findSources);
-    return { url, title, claims: parseClaims(raw) };
+    const r = await callClaude(client, userContent, findSources);
+    addUsage(usage, r.usage);
+    return { url, title, claims: parseClaims(r.text), usage };
   } catch (err) {
     // If web search is unavailable on this account, fall back to
     // recommendation-only so the audit still completes.
     if (findSources) {
       try {
-        const raw = await callClaude(client, userContent, false);
-        return { url, title, claims: parseClaims(raw) };
+        const r = await callClaude(client, userContent, false);
+        addUsage(usage, r.usage);
+        return { url, title, claims: parseClaims(r.text), usage };
       } catch (err2) {
-        return { url, title, error: `Audit failed: ${describeError(err2)}`, claims: [] };
+        return { url, title, error: `Audit failed: ${describeError(err2)}`, claims: [], usage };
       }
     }
-    return { url, title, error: `Audit failed: ${describeError(err)}`, claims: [] };
+    return { url, title, error: `Audit failed: ${describeError(err)}`, claims: [], usage };
   }
 }
 

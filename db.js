@@ -52,6 +52,19 @@ async function init() {
       used INTEGER NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS scan_costs (
+      id BIGSERIAL PRIMARY KEY,
+      url TEXT,
+      source TEXT,
+      pages INTEGER NOT NULL DEFAULT 0,
+      input_tokens BIGINT NOT NULL DEFAULT 0,
+      output_tokens BIGINT NOT NULL DEFAULT 0,
+      web_searches INTEGER NOT NULL DEFAULT 0,
+      browserless_renders INTEGER NOT NULL DEFAULT 0,
+      est_cost NUMERIC(12,6) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
 }
 
 function genCode() {
@@ -155,9 +168,53 @@ async function listCredits() {
   }));
 }
 
+// Record the measured usage and estimated cost of one scan.
+async function logScanCost(row) {
+  const p = getPool();
+  if (!p) return;
+  await p.query(
+    `INSERT INTO scan_costs (url, source, pages, input_tokens, output_tokens, web_searches, browserless_renders, est_cost)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      row.url || null,
+      row.source || null,
+      row.pages || 0,
+      row.input_tokens || 0,
+      row.output_tokens || 0,
+      row.web_searches || 0,
+      row.browserless_renders || 0,
+      row.est_cost || 0
+    ]
+  );
+}
+
+// Aggregate totals plus the most recent scans, for the admin cost view.
+async function getCostSummary(limit = 50) {
+  const p = getPool();
+  if (!p) return { totals: null, recent: [] };
+  const t = await p.query(`
+    SELECT
+      count(*)::int AS scans,
+      coalesce(sum(pages), 0)::int AS pages,
+      coalesce(sum(input_tokens), 0)::bigint AS input_tokens,
+      coalesce(sum(output_tokens), 0)::bigint AS output_tokens,
+      coalesce(sum(web_searches), 0)::int AS web_searches,
+      coalesce(sum(browserless_renders), 0)::int AS browserless_renders,
+      coalesce(sum(est_cost), 0)::numeric AS total_cost,
+      coalesce(sum(est_cost) FILTER (WHERE created_at > now() - interval '7 days'), 0)::numeric AS last7_cost,
+      coalesce(sum(est_cost) FILTER (WHERE created_at > now() - interval '1 day'), 0)::numeric AS last1_cost
+    FROM scan_costs`);
+  const r = await p.query(
+    `SELECT created_at, url, source, pages, input_tokens, output_tokens, web_searches, browserless_renders, est_cost
+     FROM scan_costs ORDER BY created_at DESC LIMIT $1`, [limit]
+  );
+  return { totals: t.rows[0], recent: r.rows };
+}
+
 module.exports = {
   enabled, init, genCode,
   getCodeBalance, consumeCode,
   getFreeRemaining, consumeFree,
-  createCode, createCodeForSession, voidByPaymentIntent, listCredits
+  createCode, createCodeForSession, voidByPaymentIntent, listCredits,
+  logScanCost, getCostSummary
 };
