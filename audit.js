@@ -279,10 +279,16 @@ async function auditPage(url, { apiKey, findSources = true, factCheck = false, d
   let { title, text } = extractText(fetched.html);
   let browserless = fetched.via === 'browserless' ? 1 : 0;
 
-  // If a direct fetch returned little article text, the page is probably
-  // JavaScript-rendered or a shell. If Browserless is available, render it
-  // properly and retry. (A real article runs to thousands of characters.)
-  if ((!text || text.length < 600) && fetched.via === 'direct' && browserlessConfigured()) {
+  // Re-render when the extracted article text is implausibly thin. On
+  // JavaScript-rendered pages (SPAs) the first render can return only the static
+  // shell or a sidebar before the article body hydrates, so extraction yields a
+  // few hundred characters of nav/recent-posts instead of the article. Renders
+  // vary run to run, so retrying usually lands the full content. This runs
+  // regardless of how the page was first fetched.
+  const MIN_ARTICLE = parseInt(process.env.MIN_ARTICLE_CHARS || '800', 10);
+  let renderTries = 0;
+  while ((!text || text.length < MIN_ARTICLE) && browserlessConfigured() && renderTries < 3) {
+    renderTries += 1;
     const rendered = await fetchViaBrowserless(url);
     browserless += 1;
     if (rendered.ok) {
