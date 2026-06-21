@@ -160,41 +160,67 @@ Return up to 10 findings. If no concrete factual claim needs correcting, return 
 // chrome, then score every plausible container by its NON-LINK text length and
 // keep the densest one. Prose article bodies win; navigation and recent-post
 // lists, which are almost entirely link text, score near zero.
-function extractText(html) {
+function extractText(html, opts = {}) {
   const $ = cheerio.load(html);
-  $('script, style, noscript, nav, footer, header, aside, form, svg, iframe, button, label, select, template').remove();
+  const title = $('title').first().text().trim();
 
-  // Drop common non-article blocks by class/id signature.
-  const JUNK = /(^|[\s_-])(nav|menu|sidebar|side-bar|widget|related|recent|latest|popular|trending|from-the-blog|more-from|up-next|share|sharing|social|comment|breadcrumb|pagination|paging|subscribe|newsletter|signup|promo|advert|\bads?\b|banner|cookie|consent|gdpr|modal|popup|overlay|toc|table-of-contents|tag-list|tags|categories|author-(?:box|bio)|read-more|more-posts|recommended|skip-link)([\s_-]|$)/i;
+  // (1) JSON-LD articleBody, captured BEFORE scripts are stripped. Most CMSes
+  // (WordPress, etc.) embed the full clean article here, which is a reliable
+  // source when the visible DOM is awkwardly structured.
+  let jsonLdText = '';
+  $('script[type="application/ld+json"]').each((_, el) => {
+    try {
+      const data = JSON.parse($(el).contents().text());
+      const nodes = Array.isArray(data) ? data : (data['@graph'] || [data]);
+      for (const node of nodes) {
+        const body = node && (node.articleBody || node.text);
+        if (typeof body === 'string' && body.length > jsonLdText.length) jsonLdText = body;
+      }
+    } catch { /* ignore malformed JSON-LD */ }
+  });
+  jsonLdText = jsonLdText.replace(/\s+/g, ' ').trim();
+
+  // (2) Visible body text with ONLY scripts/styles removed - captured before any
+  // chrome pruning so it can serve as a guaranteed floor. This is what prevents
+  // a 0-length result on a page that clearly has text.
+  $('script, style, noscript, svg, template').remove();
+  const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+
+  // (3) Smart scored extraction: prune chrome, drop link-heavy widgets, then keep
+  // the densest low-link container. This is what cleanly isolates the article on
+  // normal pages (and ignores "recent posts" style sidebars).
+  $('nav, footer, header, aside, form, iframe, button, label, select').remove();
+  const JUNK = /(^|[\s_-])(nav|menu|sidebar|side-bar|widget|related|recent|latest|popular|trending|from-the-blog|more-from|up-next|share|sharing|social|comment|breadcrumb|pagination|paging|subscribe|newsletter|signup|promo|advert|banner|cookie|consent|gdpr|modal|popup|overlay|toc|table-of-contents|author-(?:box|bio)|read-more|more-posts|recommended|skip-link)([\s_-]|$)/i;
   $('[class],[id]').each((_, el) => {
     const sig = (($(el).attr('class') || '') + ' ' + ($(el).attr('id') || ''));
     if (JUNK.test(sig)) $(el).remove();
   });
 
-  const title = $('title').first().text().trim();
-
-  // Score candidate containers by non-link text length and keep the best one.
   let best = null;
   let bestScore = 0;
   $('article, main, [role="main"], section, div').each((_, el) => {
     const node = $(el);
     const total = node.text().replace(/\s+/g, ' ').trim().length;
-    if (total < 200) return; // too small to be the article body
+    if (total < 200) return;
     let linkLen = 0;
     node.find('a').each((_, a) => { linkLen += ($(a).text() || '').length; });
-    const score = total - linkLen; // reward prose, penalize link menus
+    const score = total - linkLen;
     if (score > bestScore) { bestScore = score; best = node; }
   });
+  const scored = best ? best.text().replace(/\s+/g, ' ').trim() : '';
 
-  let text = (best ? best.text() : $('body').text()).replace(/\s+/g, ' ').trim();
+  // Prefer the clean scored article; fall back to JSON-LD, then to the raw body
+  // floor. We only ever return empty if the page genuinely has no static text
+  // (e.g. a JavaScript-rendered shell), which the caller reports honestly.
+  let text = scored;
+  if (text.length < 200 && jsonLdText.length > text.length) text = jsonLdText;
+  if (text.length < 200 && bodyText.length > text.length) text = bodyText;
 
-  // If scoring found nothing solid (unusual markup, no real prose container),
-  // fall back to the full body text so we never silently return a sidebar.
-  if (text.length < 200) {
-    text = $('body').text().replace(/\s+/g, ' ').trim();
+  const result = { title, text: text.slice(0, MAX_TEXT_CHARS) };
+  if (opts.debug) {
+    result.sources = { scoredLen: scored.length, jsonLdLen: jsonLdText.length, bodyLen: bodyText.length, chosen: text === scored ? 'scored' : text === jsonLdText ? 'jsonld' : text === bodyText ? 'body' : 'none' };
   }
-
-  return { title, text: text.slice(0, MAX_TEXT_CHARS) };
+  return result;
 }
 
 function parseClaims(raw) {
@@ -326,7 +352,11 @@ async function auditPage(url, { apiKey, findSources = true, factCheck = false, d
   const browserless = 0;
 
   if (!text || text.length < 120) {
-    return { url, title, error: 'Too little readable text to audit.', claims: [], browserless };
+    const big = fetched.html && fetched.html.length > 5000;
+    const msg = big
+      ? 'The page loaded but its article text could not be read automatically (it may be rendered by JavaScript). Use Paste text to audit this page.'
+      : 'Too little readable text to audit.';
+    return { url, title, error: msg, claims: [], browserless };
   }
 
   // If the visible text we extracted is itself a bot-challenge interstitial, the
