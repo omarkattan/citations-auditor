@@ -6,7 +6,7 @@
 const cheerio = require('cheerio');
 const Anthropic = require('@anthropic-ai/sdk');
 const https = require('node:https');
-const { fetchHtml, fetchViaBrowserless, browserlessConfigured } = require('./fetchpage');
+const { fetchHtml, fetchViaBrowserless, fetchViaBrowserlessBQL, browserlessConfigured } = require('./fetchpage');
 
 const MODEL = process.env.CLAIMS_MODEL || 'claude-sonnet-4-6';
 const MAX_TEXT_CHARS = 8000;
@@ -287,9 +287,11 @@ async function auditPage(url, { apiKey, findSources = true, factCheck = false, d
   // regardless of how the page was first fetched.
   const MIN_ARTICLE = parseInt(process.env.MIN_ARTICLE_CHARS || '800', 10);
   let renderTries = 0;
-  while ((!text || text.length < MIN_ARTICLE) && browserlessConfigured() && renderTries < 3) {
+  while ((!text || text.length < MIN_ARTICLE) && browserlessConfigured() && renderTries < 2) {
     renderTries += 1;
-    const rendered = await fetchViaBrowserless(url);
+    // /unblock returns the static shell on SPA pages, so re-render with BQL,
+    // which waits for the network to go idle and the article body to load.
+    const rendered = await fetchViaBrowserlessBQL(url);
     browserless += 1;
     if (rendered.ok) {
       const ex = extractText(rendered.html);
