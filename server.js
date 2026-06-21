@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { discover } = require('./discover');
 const { auditPage, auditText, diagnose, extractText } = require('./audit');
-const { fetchHtml, fetchDiagnostic, fetchViaBrowserlessBQL } = require('./fetchpage');
+const { fetchHtml, fetchDiagnostic } = require('./fetchpage');
 const { logScan, getScans, logPages, getPages, ensureTabs, storageMode } = require('./sheets');
 const db = require('./db');
 const payments = require('./payments');
@@ -175,7 +175,7 @@ app.post('/api/audit-text', async (req, res) => {
   const started = Date.now();
   const label = (url || '').trim() || 'Pasted text';
   try {
-    const result = await auditText(text, { url: label, findSources: findSources !== false, factCheck: factCheck === true });
+    const result = await auditText(text, { url: label, findSources: findSources === true, factCheck: factCheck === true });
     const claims = result.claims || [];
     if (account.paywall && !result.error) await chargeAccount(account, pageCost);
     await logScan({
@@ -236,20 +236,6 @@ app.get('/api/fetch-test', async (req, res) => {
   } else {
     diag.pipeline = { via: 'none', error: fetched.error || 'fetch failed', status: fetched.status };
   }
-  // Optional: probe BrowserQL directly so we can see what it returns for SPA pages.
-  if (req.query.bql === 'true') {
-    const b = await fetchViaBrowserlessBQL(url);
-    const ex = b.ok ? extractText(b.html) : { title: '', text: '' };
-    diag.bql = {
-      ok: b.ok,
-      status: b.status,
-      error: b.error || null,
-      htmlLen: b.html ? b.html.length : 0,
-      textLen: ex.text ? ex.text.length : 0,
-      title: ex.title || '',
-      sample: (ex.text || '').replace(/\s+/g, ' ').slice(0, 300)
-    };
-  }
   res.json(diag);
 });
 
@@ -262,7 +248,7 @@ app.get('/api/audit-test', async (req, res) => {
   const factCheck = req.query.factCheck === 'true';
   try {
     const started = Date.now();
-    const result = await auditPage(url, { findSources: req.query.findSources !== 'false', factCheck, debug: true });
+    const result = await auditPage(url, { findSources: req.query.findSources === 'true', factCheck, debug: true });
     res.json({
       url,
       factCheck,
@@ -283,7 +269,7 @@ app.get('/api/scan/stream', async (req, res) => {
   const url = (req.query.url || '').trim();
   const source = (req.query.source || 'crawl').trim();
   const pathPrefix = (req.query.path || '').trim();
-  const findSources = req.query.findSources !== 'false';
+  const findSources = req.query.findSources === 'true'; // opt-in: search costs tokens
   const factCheck = req.query.factCheck === 'true';
   let maxPages = parseInt(req.query.maxPages, 10) || 15;
   maxPages = Math.max(1, Math.min(maxPages, MAX_PAGES_CAP));
