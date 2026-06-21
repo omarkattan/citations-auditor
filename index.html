@@ -457,7 +457,7 @@
     <div class="eyebrow">// pricing</div>
     <h2 class="sec-title">Simple credits. Pay as you audit.</h2>
     <div class="pricing" id="pricingGrid"></div>
-    <div class="pricing-note">Your first 3 pages are free. A standard audit costs 1 credit; a fact-checked audit costs 3. Credits never expire, and you only pay for pages that actually run.</div>
+    <div class="pricing-note" id="pricingNote">Your first 3 pages are free. A standard audit costs 3 credits; a fact-checked audit costs 6. Credits never expire, and you only pay for pages that actually run.</div>
   </section>
 
   <section class="mkt">
@@ -478,7 +478,7 @@
       </details>
       <details class="faq-item">
         <summary>How do credits work?</summary>
-        <div class="fa">A standard audit uses 1 credit per page. A fact-checked audit uses 3 credits per page, because verifying facts against live sources does more work. Crawl mode audits several pages at once and charges per page. You only pay for pages that actually run, never for ones that error or get blocked.</div>
+        <div class="fa" id="faqCredits">A standard audit uses 3 credits per page. A fact-checked audit uses 6 credits per page, because verifying facts against live sources does more work. Crawl mode audits several pages at once and charges per page. You only pay for pages that actually run, never for ones that error or get blocked.</div>
       </details>
       <details class="faq-item">
         <summary>Do credits expire?</summary>
@@ -1110,13 +1110,15 @@
       b.addEventListener('click', () => buyPackage(b.dataset.pkg, enabled)));
   }
 
-  function renderPricingGrid(packages, enabled, factCheckCost) {
+  function renderPricingGrid(packages, enabled, factCheckCost, standardCost) {
     const grid = document.getElementById('pricingGrid');
     if (!grid || !packages.length) return;
-    const fcc = factCheckCost || 3;
+    const fcc = factCheckCost || 6;
+    const sc = standardCost || 3;
     const mid = Math.floor(packages.length / 2);
     grid.innerHTML = packages.map((p, i) => {
       const per = (p.amount / 100) / p.credits;
+      const stdPages = Math.floor(p.credits / sc);
       const fcPages = Math.floor(p.credits / fcc);
       const popular = i === mid;
       return '<div class="price-card' + (popular ? ' popular' : '') + '">' +
@@ -1124,7 +1126,7 @@
         '<div class="pname">' + esc(p.name) + '</div>' +
         '<div class="pprice">$' + (p.amount / 100).toFixed(2) + '</div>' +
         '<div class="pcred">' + p.credits + ' credits</div>' +
-        '<div class="puse">' + p.credits + ' standard audits<br>or ' + fcPages + ' fact-checked audits</div>' +
+        '<div class="puse">' + stdPages + ' standard audits<br>or ' + fcPages + ' fact-checked audits</div>' +
         '<div class="pper">$' + per.toFixed(2) + ' per credit</div>' +
         '<div class="pbtn"><button data-pkg="' + esc(p.id) + '">Buy ' + esc(p.name) + '</button></div>' +
       '</div>';
@@ -1133,10 +1135,21 @@
       b.addEventListener('click', () => buyPackage(b.dataset.pkg, enabled)));
   }
 
+  function syncPricingCopy(pkg) {
+    var sc = pkg.standardCost || 3, fcc = pkg.factCheckCost || 6, fp = (pkg.freePages == null ? 3 : pkg.freePages);
+    var sCr = sc + ' credit' + (sc === 1 ? '' : 's');
+    var fCr = fcc + ' credit' + (fcc === 1 ? '' : 's');
+    var note = document.getElementById('pricingNote');
+    if (note) note.textContent = 'Your first ' + fp + ' pages are free. A standard audit costs ' + sCr + '; a fact-checked audit costs ' + fcc + '. Credits never expire, and you only pay for pages that actually run.';
+    var fc = document.getElementById('faqCredits');
+    if (fc) fc.textContent = 'A standard audit uses ' + sCr + ' per page. A fact-checked audit uses ' + fCr + ' per page, because verifying facts against live sources does more work. Crawl mode audits several pages at once and charges per page. You only pay for pages that actually run, never for ones that error or get blocked.';
+  }
+
   async function initCredits() {
     try {
       const pkg = await (await fetch('/api/packages')).json();
-      renderPricingGrid(pkg.packages || [], pkg.paymentsEnabled, pkg.factCheckCost);
+      renderPricingGrid(pkg.packages || [], pkg.paymentsEnabled, pkg.factCheckCost, pkg.standardCost);
+      syncPricingCopy(pkg);
       await refreshCredits();
       if (!paywall) return;
       creditsBar.style.display = 'flex';
