@@ -34,19 +34,26 @@ function makeClient(key, extra = {}) {
   return new Anthropic(opts);
 }
 
-const SYSTEM_PROMPT = `You are an E-E-A-T claim auditor for a digital marketing agency. You read the text of a single web page and flag statements that assert something factual without backing it up, judged against Google's E-E-A-T guidelines (Experience, Expertise, Authoritativeness, Trustworthiness).
+const SYSTEM_PROMPT = `You are an E-E-A-T claim auditor for a digital marketing agency. You read the text of a single web page and flag statements that assert something factual without backing it up on the page, judged against Google's E-E-A-T guidelines (Experience, Expertise, Authoritativeness, Trustworthiness).
 
-Flag a claim only when it genuinely lacks substantiation. Typical targets:
-- Unsourced statistics or numbers ("90% of customers save money")
+Be thorough. Surface every material claim that is not backed on the page, not only the most obvious one. Typical targets:
+- Unsourced statistics, numbers, or percentages ("90% of customers save money", "people are living longer than ever before")
 - Unproven superlatives ("the best", "#1", "leading", "fastest")
 - Authority or award claims with no proof ("award-winning", "industry-trusted", "certified")
 - Health, finance, legal, or safety (YMYL) assertions stated as fact without an authority
 - Absolute guarantees ("guaranteed results", "always", "never", "100% safe")
+- Causal or predictive claims stated as fact ("X protects your wealth", "this leads to Y")
+
+Judgment rules (important):
+- A citation or footnote substantiates ONLY the specific claim it is directly attached to. Do NOT assume the rest of the page is sourced just because some claims carry footnotes. Judge each claim on its own.
+- A bare footnote marker with no identifiable source (for example "[1]" with no named source) is weak support. For high-stakes (YMYL) claims, you may still flag it as needing a clear, named citation.
+- Web search is ONLY for suggesting a third-party source for the fix. Finding a source online does NOT mean the claim is substantiated on the page. If the claim lacks an on-page citation, flag it regardless, and put any source you find in suggested_source.
+- When you are genuinely unsure whether a factual assertion is backed on the page, flag it rather than skip it.
 
 Do NOT flag:
-- Clearly subjective opinion framed as opinion
-- Claims that are already supported on the page with a visible source, citation, or data
+- Clearly subjective opinion framed as opinion ("we believe", "in our view")
 - Ordinary descriptive copy that makes no factual assertion
+- A claim immediately followed by its own specific, named source or data
 
 For each flagged claim, use web search to look for ONE credible third-party source (peer-reviewed study, government or standards body, reputable publication, official record) that could substantiate it. If you cannot find a genuinely credible source, set suggested_source to null. Never invent a source or URL.
 
@@ -62,7 +69,7 @@ Return ONLY a JSON array, no prose, no markdown fences. Each item must be exactl
   "suggested_source": { "title": "source title", "url": "https://..." } or null
 }
 
-Return at most 12 of the most important claims. If the page has no unsubstantiated claims, return [].`;
+Return up to 12 of the most important claims, ordered by severity. If the page truly makes no unsubstantiated factual claims, return [].`;
 
 const FACTCHECK_PROMPT = `You are an E-E-A-T claim auditor AND fact-checker for a digital marketing agency. You read the text of a single web page and do TWO jobs.
 
@@ -72,6 +79,7 @@ const FACTCHECK_PROMPT = `You are an E-E-A-T claim auditor AND fact-checker for 
 - Authority or award claims with no proof
 - Health, finance, legal, or safety (YMYL) assertions stated as fact
 - Absolute guarantees ("guaranteed", "always", "never", "100% safe")
+Be thorough and judge each claim on its own. A citation or footnote substantiates only the claim it is directly attached to; do not assume the rest of the page is sourced because some claims carry footnotes. Web search is for suggesting a source, not for deciding a claim is fine: if it lacks an on-page citation, flag it.
 
 2) ACCURACY AND RECENCY. For concrete, checkable factual claims (statistics, dates, prices, tax or regulatory figures, version numbers, "first/only/largest/oldest" claims, named facts), use web search to verify them against current reliable sources and compare:
 - If the claim conflicts with what current reliable sources say, set finding_type to "inaccurate".
@@ -287,7 +295,17 @@ async function runClaims(url, title, text, findSources, apiKey, factCheck = fals
   try {
     const r = await callClaude(client, userContent, useSearch, system);
     addUsage(usage, r.usage);
-    return { url, title, claims: parseClaims(r.text), usage };
+    let claims = parseClaims(r.text);
+    // Model output varies run to run. If a substantial page comes back with no
+    // claims, try once more before declaring it clean. (Disable with
+    // AUDIT_RETRY_EMPTY=0.)
+    if (claims.length === 0 && text.length > 1500 && process.env.AUDIT_RETRY_EMPTY !== '0') {
+      const r2 = await callClaude(client, userContent, useSearch, system);
+      addUsage(usage, r2.usage);
+      const claims2 = parseClaims(r2.text);
+      if (claims2.length) claims = claims2;
+    }
+    return { url, title, claims, usage };
   } catch (err) {
     // If web search is unavailable, fall back to substantiation-only (no
     // search, base prompt) so the audit still completes.
