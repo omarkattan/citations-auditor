@@ -133,13 +133,40 @@ function parseClaims(raw) {
   let cleaned = raw.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   const start = cleaned.indexOf('[');
   const end = cleaned.lastIndexOf(']');
-  if (start !== -1 && end !== -1) cleaned = cleaned.slice(start, end + 1);
+  if (start !== -1 && end !== -1 && end > start) cleaned = cleaned.slice(start, end + 1);
+  else if (start !== -1) cleaned = cleaned.slice(start); // array likely truncated (no closing ])
   try {
     const parsed = JSON.parse(cleaned);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
-    return [];
+    // Recover from a truncated or slightly malformed array by extracting every
+    // complete top-level {...} object (string- and escape-aware).
+    return recoverObjects(cleaned);
   }
+}
+
+function recoverObjects(s) {
+  const objs = [];
+  let depth = 0, inStr = false, esc = false, objStart = -1;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{') { if (depth === 0) objStart = i; depth++; }
+    else if (c === '}') {
+      depth--;
+      if (depth === 0 && objStart !== -1) {
+        try { objs.push(JSON.parse(s.slice(objStart, i + 1))); } catch {}
+        objStart = -1;
+      }
+    }
+  }
+  return objs;
 }
 
 function collectText(content) {
@@ -165,7 +192,7 @@ function isTransient(err) {
 async function callClaude(client, userContent, useWebSearch, system, attempt = 0) {
   const request = {
     model: MODEL,
-    max_tokens: 2500,
+    max_tokens: parseInt(process.env.CLAIMS_MAX_TOKENS || '8000', 10),
     system: system || SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userContent }]
   };
