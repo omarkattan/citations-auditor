@@ -114,6 +114,35 @@ Return at most 12 of the most important findings. If the page genuinely has none
 
 function buildSystemPrompt(factCheck) { return factCheck ? FACTCHECK_PROMPT : SYSTEM_PROMPT; }
 
+const ACCURACY_PROMPT = `You are a fact-checker for a digital marketing agency. You read the text of a single web page and check its concrete, checkable factual claims for ACCURACY and RECENCY using web search. Concrete claims include statistics, percentages, dates, prices, tax or regulatory figures, version numbers, "first/only/largest/oldest" claims, and named facts about companies, products, laws, or events.
+
+For each such claim worth checking, search current reliable sources and compare:
+- If the claim conflicts with what current reliable sources say, set finding_type "inaccurate".
+- If the claim was likely true once but is now superseded by newer data, prices, versions, or dates, set finding_type "outdated".
+
+Honesty rules:
+- Only assert "inaccurate" or "outdated" when you actually found a credible contradicting or updated source. Set confidence "high" or "medium", put what current sources say in current_fact, and put that source in suggested_source.
+- If a claim looks questionable but you cannot confirm it is wrong, do NOT claim it is wrong. Set finding_type to your best guess, confidence "low", write the issue as a "worth verifying" note, and leave current_fact as "".
+- Never invent a source, URL, statistic, or current fact.
+- Do NOT flag claims that are merely unsourced but plausibly accurate; a separate pass handles substantiation. Focus only on accuracy and recency.
+
+Run the web searches you need, then output ONLY a JSON array, no prose, no markdown fences. Each item must be exactly:
+{
+  "claim": "the claim text, trimmed",
+  "context": "a short surrounding snippet for locating it",
+  "finding_type": "inaccurate | outdated",
+  "claim_type": "statistic | fact | superlative | authority | other",
+  "eeat": "Experience | Expertise | Authoritativeness | Trustworthiness",
+  "severity": "high | medium | low",
+  "confidence": "high | medium | low",
+  "issue": "one sentence on what is inaccurate or outdated (or a 'worth verifying' note when confidence is low)",
+  "current_fact": "what current reliable sources actually say; empty string if unverified",
+  "recommendation": "the correction",
+  "suggested_source": { "title": "source title", "url": "https://..." } or null
+}
+
+Return up to 10 findings. If no concrete factual claim needs correcting, return [].`;
+
 function extractText(html) {
   const $ = cheerio.load(html);
   $('script, style, noscript, nav, footer, header, aside, form, svg').remove();
@@ -307,9 +336,38 @@ async function auditText(rawText, { url = 'Pasted text', title = '', apiKey, fin
   return runClaims(url, title, text, findSources, key, factCheck);
 }
 
-// Shared core: send the page text to Claude and return parsed claims. When
-// factCheck is on, the prompt also verifies accuracy and recency via web search.
-// Falls back to substantiation-only (no search) if the search call fails.
+// Run one audit pass (one prompt). Retries a substantial empty result a few
+// times, since model output varies run to run. Returns parsed claims.
+async function runPass(client, userContent, useSearch, system, usage, textLen) {
+  const r = await callClaude(client, userContent, useSearch, system);
+  addUsage(usage, r.usage);
+  let claims = parseClaims(r.text);
+  const maxRetries = parseInt(process.env.AUDIT_RETRY_EMPTY || '2', 10);
+  let attempts = 0;
+  while (claims.length === 0 && textLen > 1200 && attempts < maxRetries) {
+    attempts += 1;
+    const rr = await callClaude(client, userContent, useSearch, system);
+    addUsage(usage, rr.usage);
+    claims = parseClaims(rr.text);
+  }
+  return claims;
+}
+
+// Merge accuracy findings (inaccurate/outdated) with substantiation findings,
+// de-duplicating by claim text and preferring the accuracy finding.
+function mergeClaims(substantiation, accuracy) {
+  const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80);
+  const accKeys = new Set((accuracy || []).map((c) => norm(c.claim)));
+  const subOnly = (substantiation || [])
+    .filter((c) => !accKeys.has(norm(c.claim)))
+    .map((c) => ({ ...c, finding_type: c.finding_type || 'unsubstantiated' }));
+  return [...(accuracy || []), ...subOnly].slice(0, 14);
+}
+
+// Shared core. Standard mode runs the substantiation pass. Fact-check mode runs
+// the reliable substantiation pass AND a focused accuracy/recency pass, then
+// merges, so fact-check always returns at least what standard would, plus any
+// inaccurate or outdated findings on top.
 async function runClaims(url, title, text, findSources, apiKey, factCheck = false) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set.');
@@ -317,39 +375,33 @@ async function runClaims(url, title, text, findSources, apiKey, factCheck = fals
   const client = makeClient(key, { maxRetries: 3, timeout: 120000 });
   const userContent = `Page URL: ${url}\nPage title: ${title}\n\nPage text:\n"""\n${text}\n"""`;
   const usage = { ...ZERO_USAGE };
-  // Fact-checking requires web search to verify against current sources.
-  const useSearch = findSources || factCheck;
-  const system = buildSystemPrompt(factCheck);
 
   try {
-    const r = await callClaude(client, userContent, useSearch, system);
-    addUsage(usage, r.usage);
-    let claims = parseClaims(r.text);
-    // Output varies run to run, and fact-check mode sometimes returns nothing on
-    // a page that clearly has claims. Retry a substantial empty result up to
-    // twice before declaring it clean. (Disable with AUDIT_RETRY_EMPTY=0.)
-    const maxEmptyRetries = parseInt(process.env.AUDIT_RETRY_EMPTY || '2', 10);
-    let attempts = 0;
-    while (claims.length === 0 && text.length > 1200 && attempts < maxEmptyRetries) {
-      attempts += 1;
-      const rr = await callClaude(client, userContent, useSearch, system);
-      addUsage(usage, rr.usage);
-      claims = parseClaims(rr.text);
+    if (!factCheck) {
+      const claims = await runPass(client, userContent, findSources, SYSTEM_PROMPT, usage, text.length);
+      return { url, title, claims, usage };
     }
-    return { url, title, claims, usage };
+
+    // Fact-check: substantiation pass (reliable) + accuracy pass, merged.
+    const substantiation = await runPass(client, userContent, findSources, SYSTEM_PROMPT, usage, text.length);
+    let accuracy = [];
+    try {
+      const r = await callClaude(client, userContent, true, ACCURACY_PROMPT);
+      addUsage(usage, r.usage);
+      accuracy = parseClaims(r.text);
+    } catch {
+      // Accuracy pass failed (for example web search unavailable); keep the
+      // substantiation findings rather than failing the whole audit.
+    }
+    return { url, title, claims: mergeClaims(substantiation, accuracy), usage };
   } catch (err) {
-    // If web search is unavailable, fall back to substantiation-only (no
-    // search, base prompt) so the audit still completes.
-    if (useSearch) {
-      try {
-        const r = await callClaude(client, userContent, false, SYSTEM_PROMPT);
-        addUsage(usage, r.usage);
-        return { url, title, claims: parseClaims(r.text), usage };
-      } catch (err2) {
-        return { url, title, error: `Audit failed: ${describeError(err2)}`, claims: [], usage };
-      }
+    // Last resort: substantiation only, no search.
+    try {
+      const claims = await runPass(client, userContent, false, SYSTEM_PROMPT, usage, text.length);
+      return { url, title, claims, usage };
+    } catch (err2) {
+      return { url, title, error: `Audit failed: ${describeError(err2)}`, claims: [], usage };
     }
-    return { url, title, error: `Audit failed: ${describeError(err)}`, claims: [], usage };
   }
 }
 
