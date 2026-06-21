@@ -196,6 +196,49 @@ async function fetchViaBrowserless(url, timeoutMs) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+// BrowserQL fetch. Unlike /unblock, this waits for the network to go idle, so
+// JavaScript-rendered pages (SPAs) have time to load their article body before
+// we capture the HTML. It also clears Cloudflare. Best for thin/SPA pages.
+async function fetchViaBrowserlessBQL(url, timeoutMs) {
+  const token = process.env.BROWSERLESS_TOKEN;
+  if (!token) return { ok: false, status: null, html: null, via: 'bql', error: 'BROWSERLESS_TOKEN not set' };
+
+  const cfg = browserlessConfig();
+  const t = timeoutMs || parseInt(process.env.BROWSERLESS_TIMEOUT_MS || String(cfg.serverTimeoutMs + 15000), 10);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), t);
+  try {
+    const qs = new URLSearchParams({ token, humanlike: 'true' });
+    if (cfg.proxy) {
+      qs.set('proxy', cfg.proxy);
+      if (cfg.proxyCountry) qs.set('proxyCountry', cfg.proxyCountry);
+      if (cfg.proxySticky) qs.set('proxySticky', 'true');
+    }
+    const query = 'mutation Unblock($url: String!) { goto(url: $url, waitUntil: networkIdle) { status } verify(type: cloudflare) { found solved } content: html { html } }';
+    const res = await fetch(`${cfg.base}/chromium/bql?${qs.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables: { url } }),
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      const b = await res.text().catch(() => '');
+      return { ok: false, status: res.status, html: null, via: 'bql', error: `bql ${res.status}: ${b.slice(0, 200)}` };
+    }
+    const data = await res.json();
+    if (data.errors && data.errors.length) {
+      return { ok: false, status: 200, html: null, via: 'bql', error: 'bql: ' + (data.errors[0].message || 'graphql error') };
+    }
+    const html = (data.data && data.data.content && data.data.content.html) || '';
+    const fin = finalizeBrowserless(html);
+    return { ...fin, via: 'bql' };
+  } catch (err) {
+    return { ok: false, status: null, html: null, via: 'bql', error: err.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Detect an UNSOLVED bot interstitial. Two things make this tricky: Cloudflare
 // leaves a "challenge-platform" script (and some boilerplate text) in the HTML
 // even after the challenge is solved, and that boilerplate can sit in the head
@@ -288,4 +331,4 @@ async function fetchDiagnostic(url) {
   return out;
 }
 
-module.exports = { fetchHtml, fetchViaBrowserless, fetchDiagnostic, browserlessConfigured, browserlessAlways, looksChallenged, BROWSER_HEADERS };
+module.exports = { fetchHtml, fetchViaBrowserless, fetchViaBrowserlessBQL, fetchDiagnostic, browserlessConfigured, browserlessAlways, looksChallenged, BROWSER_HEADERS };
