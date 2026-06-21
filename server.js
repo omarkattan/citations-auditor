@@ -18,10 +18,10 @@ const MAX_PAGES_CAP = 25;
 const FREE_PAGES = parseInt(process.env.FREE_PAGES || '3', 10);
 // A fact-checked page costs more to run (more web searches and tokens), so it
 // spends more credits. Keeps margin healthy on the premium operation.
-const FACTCHECK_COST = parseInt(process.env.FACTCHECK_CREDIT_COST || '3', 10);
+const FACTCHECK_COST = parseInt(process.env.FACTCHECK_CREDIT_COST || '6', 10);
 // Standard (non-fact-check) page cost. With web search on, a standard audit
 // is no longer a near-free call, so this is tunable without a redeploy.
-const STANDARD_COST = parseInt(process.env.STANDARD_CREDIT_COST || '1', 10);
+const STANDARD_COST = parseInt(process.env.STANDARD_CREDIT_COST || '3', 10);
 
 if (!ADMIN_KEY) {
   console.warn('[admin] ADMIN_KEY is not set - all admin endpoints are disabled until you set it.');
@@ -127,7 +127,7 @@ app.get('/api/credits', async (req, res) => {
 
 app.get('/api/packages', (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ paymentsEnabled: payments.enabled(), packages: Object.values(payments.PACKAGES), factCheckCost: FACTCHECK_COST, freePages: FREE_PAGES });
+  res.json({ paymentsEnabled: payments.enabled(), packages: Object.values(payments.PACKAGES), standardCost: STANDARD_COST, factCheckCost: FACTCHECK_COST, freePages: FREE_PAGES });
 });
 
 app.post('/api/checkout', async (req, res) => {
