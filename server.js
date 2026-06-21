@@ -19,6 +19,9 @@ const FREE_PAGES = parseInt(process.env.FREE_PAGES || '3', 10);
 // A fact-checked page costs more to run (more web searches and tokens), so it
 // spends more credits. Keeps margin healthy on the premium operation.
 const FACTCHECK_COST = parseInt(process.env.FACTCHECK_CREDIT_COST || '3', 10);
+// Standard (non-fact-check) page cost. With web search on, a standard audit
+// is no longer a near-free call, so this is tunable without a redeploy.
+const STANDARD_COST = parseInt(process.env.STANDARD_CREDIT_COST || '1', 10);
 
 if (!ADMIN_KEY) {
   console.warn('[admin] ADMIN_KEY is not set - all admin endpoints are disabled until you set it.');
@@ -161,7 +164,7 @@ app.get('/api/admin/grant', async (req, res) => {
 app.post('/api/audit-text', async (req, res) => {
   const { text, url, findSources, factCheck } = req.body || {};
   if (!text || !text.trim()) return res.status(400).json({ error: 'No text provided.' });
-  const pageCost = factCheck === true ? FACTCHECK_COST : 1;
+  const pageCost = factCheck === true ? FACTCHECK_COST : STANDARD_COST;
 
   const account = await resolveAccount(req);
   if (account.paywall) {
@@ -175,7 +178,7 @@ app.post('/api/audit-text', async (req, res) => {
   const started = Date.now();
   const label = (url || '').trim() || 'Pasted text';
   try {
-    const result = await auditText(text, { url: label, findSources: findSources === true, factCheck: factCheck === true });
+    const result = await auditText(text, { url: label, findSources: findSources !== false, factCheck: factCheck === true });
     const claims = result.claims || [];
     if (account.paywall && !result.error) await chargeAccount(account, pageCost);
     await logScan({
@@ -248,7 +251,7 @@ app.get('/api/audit-test', async (req, res) => {
   const factCheck = req.query.factCheck === 'true';
   try {
     const started = Date.now();
-    const result = await auditPage(url, { findSources: req.query.findSources === 'true', factCheck, debug: true });
+    const result = await auditPage(url, { findSources: req.query.findSources !== 'false', factCheck, debug: true });
     res.json({
       url,
       factCheck,
@@ -269,7 +272,7 @@ app.get('/api/scan/stream', async (req, res) => {
   const url = (req.query.url || '').trim();
   const source = (req.query.source || 'crawl').trim();
   const pathPrefix = (req.query.path || '').trim();
-  const findSources = req.query.findSources === 'true'; // opt-in: search costs tokens
+  const findSources = req.query.findSources !== 'false';
   const factCheck = req.query.factCheck === 'true';
   let maxPages = parseInt(req.query.maxPages, 10) || 15;
   maxPages = Math.max(1, Math.min(maxPages, MAX_PAGES_CAP));
@@ -296,7 +299,7 @@ app.get('/api/scan/stream', async (req, res) => {
   }
 
   const started = Date.now();
-  const pageCost = factCheck ? FACTCHECK_COST : 1;
+  const pageCost = factCheck ? FACTCHECK_COST : STANDARD_COST;
   try {
     // Resolve the paying account and gate on balance.
     const account = await resolveAccount(req);
