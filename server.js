@@ -239,7 +239,30 @@ app.get('/api/fetch-test', async (req, res) => {
   res.json(diag);
 });
 
-// ---- Streaming scan (Server-Sent Events) -----------------------------------
+// Admin: run a real audit on one URL and return the raw result, so you can see
+// exactly what the model flagged in each mode. ?factCheck=true to fact-check.
+app.get('/api/audit-test', async (req, res) => {
+  if (!adminOk(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const url = (req.query.url || '').trim();
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Provide ?url=https://...' });
+  const factCheck = req.query.factCheck === 'true';
+  try {
+    const started = Date.now();
+    const result = await auditPage(url, { findSources: req.query.findSources !== 'false', factCheck });
+    res.json({
+      url,
+      factCheck,
+      error: result.error || null,
+      browserless: result.browserless || 0,
+      claimsCount: (result.claims || []).length,
+      usage: result.usage || null,
+      durationSec: Math.round((Date.now() - started) / 1000),
+      claims: result.claims || []
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/scan/stream', async (req, res) => {
   const url = (req.query.url || '').trim();
