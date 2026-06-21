@@ -232,6 +232,17 @@ async function auditPage(url, { apiKey, findSources = true, factCheck = false } 
     return { url, title, error: 'Too little readable text to audit.', claims: [], browserless };
   }
 
+  // If the visible text we extracted is itself a bot-challenge interstitial, the
+  // page was not really rendered. Report it as blocked instead of auditing the
+  // challenge and falsely reporting "no issues". (Real article text never shows
+  // these phrases as visible copy; challenge scripts are stripped on extraction.)
+  if (/\b(verify(?:ing)? you are human|enable javascript and cookies|just a moment|checking your browser|needs to review the security of your connection|attention required|please verify you are (?:a )?human|complete the security check|press (?:and|&) hold)\b/i.test(text.slice(0, 1500))) {
+    const note = browserlessConfigured()
+      ? ', even through Browserless. Try Paste text.'
+      : '. Connect Browserless or use Paste text.';
+    return { url, title, error: `Blocked by the site (bot challenge)${note}`, claims: [], browserless };
+  }
+
   const result = await runClaims(url, title, text, findSources, key, factCheck);
   result.browserless = browserless;
   return result;
