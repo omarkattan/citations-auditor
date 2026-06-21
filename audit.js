@@ -260,7 +260,7 @@ function addUsage(acc, u) {
   return acc;
 }
 
-async function auditPage(url, { apiKey, findSources = true, factCheck = false } = {}) {
+async function auditPage(url, { apiKey, findSources = true, factCheck = false, debug = false } = {}) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set.');
 
@@ -309,7 +309,7 @@ async function auditPage(url, { apiKey, findSources = true, factCheck = false } 
     return { url, title, error: `Blocked by the site (bot challenge)${note}`, claims: [], browserless };
   }
 
-  const result = await runClaims(url, title, text, findSources, key, factCheck);
+  const result = await runClaims(url, title, text, findSources, key, factCheck, debug);
   result.browserless = browserless;
   return result;
 }
@@ -337,11 +337,12 @@ async function auditText(rawText, { url = 'Pasted text', title = '', apiKey, fin
 }
 
 // Run one audit pass (one prompt). Retries a substantial empty result a few
-// times, since model output varies run to run. Returns parsed claims.
+// times, since model output varies run to run. Returns { claims, raw }.
 async function runPass(client, userContent, useSearch, system, usage, textLen) {
   const r = await callClaude(client, userContent, useSearch, system);
   addUsage(usage, r.usage);
   let claims = parseClaims(r.text);
+  let raw = r.text;
   const maxRetries = parseInt(process.env.AUDIT_RETRY_EMPTY || '2', 10);
   let attempts = 0;
   while (claims.length === 0 && textLen > 1200 && attempts < maxRetries) {
@@ -349,8 +350,9 @@ async function runPass(client, userContent, useSearch, system, usage, textLen) {
     const rr = await callClaude(client, userContent, useSearch, system);
     addUsage(usage, rr.usage);
     claims = parseClaims(rr.text);
+    raw = rr.text;
   }
-  return claims;
+  return { claims, raw };
 }
 
 // Merge accuracy findings (inaccurate/outdated) with substantiation findings,
@@ -368,39 +370,49 @@ function mergeClaims(substantiation, accuracy) {
 // the reliable substantiation pass AND a focused accuracy/recency pass, then
 // merges, so fact-check always returns at least what standard would, plus any
 // inaccurate or outdated findings on top.
-async function runClaims(url, title, text, findSources, apiKey, factCheck = false) {
+async function runClaims(url, title, text, findSources, apiKey, factCheck = false, debug = false) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set.');
 
   const client = makeClient(key, { maxRetries: 3, timeout: 120000 });
   const userContent = `Page URL: ${url}\nPage title: ${title}\n\nPage text:\n"""\n${text}\n"""`;
   const usage = { ...ZERO_USAGE };
+  const dbg = debug ? { textLen: text.length } : null;
 
   try {
     if (!factCheck) {
-      const claims = await runPass(client, userContent, findSources, SYSTEM_PROMPT, usage, text.length);
-      return { url, title, claims, usage };
+      const p = await runPass(client, userContent, findSources, SYSTEM_PROMPT, usage, text.length);
+      if (dbg) dbg.substantiationRaw = (p.raw || '').slice(0, 1200);
+      return { url, title, claims: p.claims, usage, debug: dbg };
     }
 
     // Fact-check: substantiation pass (reliable) + accuracy pass, merged.
-    const substantiation = await runPass(client, userContent, findSources, SYSTEM_PROMPT, usage, text.length);
+    const sub = await runPass(client, userContent, findSources, SYSTEM_PROMPT, usage, text.length);
     let accuracy = [];
+    let accuracyRaw = '';
     try {
       const r = await callClaude(client, userContent, true, ACCURACY_PROMPT);
       addUsage(usage, r.usage);
       accuracy = parseClaims(r.text);
-    } catch {
-      // Accuracy pass failed (for example web search unavailable); keep the
-      // substantiation findings rather than failing the whole audit.
+      accuracyRaw = r.text || '';
+    } catch (e) {
+      accuracyRaw = 'ACCURACY PASS ERROR: ' + (e.message || e);
     }
-    return { url, title, claims: mergeClaims(substantiation, accuracy), usage };
+    if (dbg) {
+      dbg.substantiationRaw = (sub.raw || '').slice(0, 1200);
+      dbg.accuracyRaw = accuracyRaw.slice(0, 1200);
+      dbg.subCount = sub.claims.length;
+      dbg.accCount = accuracy.length;
+    }
+    return { url, title, claims: mergeClaims(sub.claims, accuracy), usage, debug: dbg };
   } catch (err) {
     // Last resort: substantiation only, no search.
     try {
-      const claims = await runPass(client, userContent, false, SYSTEM_PROMPT, usage, text.length);
-      return { url, title, claims, usage };
+      const p = await runPass(client, userContent, false, SYSTEM_PROMPT, usage, text.length);
+      if (dbg) { dbg.substantiationRaw = (p.raw || '').slice(0, 1200); dbg.fallback = true; }
+      return { url, title, claims: p.claims, usage, debug: dbg };
     } catch (err2) {
-      return { url, title, error: `Audit failed: ${describeError(err2)}`, claims: [], usage };
+      return { url, title, error: `Audit failed: ${describeError(err2)}`, claims: [], usage, debug: dbg };
     }
   }
 }
