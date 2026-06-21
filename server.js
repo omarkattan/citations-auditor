@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { discover } = require('./discover');
 const { auditPage, auditText, diagnose, extractText } = require('./audit');
-const { fetchHtml, fetchDiagnostic } = require('./fetchpage');
+const { fetchHtml, fetchDiagnostic, fetchViaBrowserlessBQL } = require('./fetchpage');
 const { logScan, getScans, logPages, getPages, ensureTabs, storageMode } = require('./sheets');
 const db = require('./db');
 const payments = require('./payments');
@@ -235,6 +235,20 @@ app.get('/api/fetch-test', async (req, res) => {
     };
   } else {
     diag.pipeline = { via: 'none', error: fetched.error || 'fetch failed', status: fetched.status };
+  }
+  // Optional: probe BrowserQL directly so we can see what it returns for SPA pages.
+  if (req.query.bql === 'true') {
+    const b = await fetchViaBrowserlessBQL(url);
+    const ex = b.ok ? extractText(b.html) : { title: '', text: '' };
+    diag.bql = {
+      ok: b.ok,
+      status: b.status,
+      error: b.error || null,
+      htmlLen: b.html ? b.html.length : 0,
+      textLen: ex.text ? ex.text.length : 0,
+      title: ex.title || '',
+      sample: (ex.text || '').replace(/\s+/g, ' ').slice(0, 300)
+    };
   }
   res.json(diag);
 });
