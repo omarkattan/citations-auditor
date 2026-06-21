@@ -108,7 +108,9 @@ Return ONLY a JSON array, no prose, no markdown fences. Each item must be exactl
   "suggested_source": { "title": "source title", "url": "https://..." } or null
 }
 
-Return at most 12 of the most important findings. If the page has none, return [].`;
+Process: first carry out job 1 (substantiation) on the page, which needs no searching. Then for job 2 run the web searches you need to verify the concrete facts. Your final output must be ONLY the JSON array described above, nothing else. A normal marketing or blog page almost always has at least a few unsupported or checkable claims, so returning an empty array should be rare; only do so if the page genuinely makes no factual claims at all.
+
+Return at most 12 of the most important findings. If the page genuinely has none, return [].`;
 
 function buildSystemPrompt(factCheck) { return factCheck ? FACTCHECK_PROMPT : SYSTEM_PROMPT; }
 
@@ -323,14 +325,16 @@ async function runClaims(url, title, text, findSources, apiKey, factCheck = fals
     const r = await callClaude(client, userContent, useSearch, system);
     addUsage(usage, r.usage);
     let claims = parseClaims(r.text);
-    // Model output varies run to run. If a substantial page comes back with no
-    // claims, try once more before declaring it clean. (Disable with
-    // AUDIT_RETRY_EMPTY=0.)
-    if (claims.length === 0 && text.length > 1500 && process.env.AUDIT_RETRY_EMPTY !== '0') {
-      const r2 = await callClaude(client, userContent, useSearch, system);
-      addUsage(usage, r2.usage);
-      const claims2 = parseClaims(r2.text);
-      if (claims2.length) claims = claims2;
+    // Output varies run to run, and fact-check mode sometimes returns nothing on
+    // a page that clearly has claims. Retry a substantial empty result up to
+    // twice before declaring it clean. (Disable with AUDIT_RETRY_EMPTY=0.)
+    const maxEmptyRetries = parseInt(process.env.AUDIT_RETRY_EMPTY || '2', 10);
+    let attempts = 0;
+    while (claims.length === 0 && text.length > 1200 && attempts < maxEmptyRetries) {
+      attempts += 1;
+      const rr = await callClaude(client, userContent, useSearch, system);
+      addUsage(usage, rr.usage);
+      claims = parseClaims(rr.text);
     }
     return { url, title, claims, usage };
   } catch (err) {
