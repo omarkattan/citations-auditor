@@ -248,7 +248,7 @@ app.get('/api/audit-test', async (req, res) => {
   const factCheck = req.query.factCheck === 'true';
   try {
     const started = Date.now();
-    const result = await auditPage(url, { findSources: req.query.findSources !== 'false', factCheck });
+    const result = await auditPage(url, { findSources: req.query.findSources !== 'false', factCheck, debug: true });
     res.json({
       url,
       factCheck,
@@ -257,6 +257,7 @@ app.get('/api/audit-test', async (req, res) => {
       claimsCount: (result.claims || []).length,
       usage: result.usage || null,
       durationSec: Math.round((Date.now() - started) / 1000),
+      debug: result.debug || null,
       claims: result.claims || []
     });
   } catch (err) {
