@@ -34,6 +34,15 @@ function makeClient(key, extra = {}) {
   return new Anthropic(opts);
 }
 
+const SEVERITY_RUBRIC = `
+
+SEVERITY - assign every finding consistently using these rules, and do NOT default everything to "low":
+- high: a YMYL claim stated as fact without an on-page authority (health, medical, safety, financial, tax, legal); any claim a fact-check shows is inaccurate or contradicted by current reliable sources; an absolute guarantee ("100% safe", "guaranteed results", "never fails"); a specific unsourced statistic or quantified result used to back a purchase, money, or health decision; a false, expired, or unverifiable authority, certification, or award claim.
+- medium: an unsourced statistic, number, or percentage on a non-YMYL topic; an unproven superlative or category claim ("the best", "#1", "leading", "first-of-its-kind", "the only"); a fact that is outdated (true once, now superseded); a causal or predictive claim stated as fact.
+- low: vague puffery or descriptive marketing language with only a thin factual veneer, and minor unsupported specifics with little real-world stakes.
+
+When a claim could fit two bands, choose the higher one. A page that makes YMYL, guarantee, statistical, or clearly inaccurate claims MUST surface those as high or medium per the rules above; returning only low-severity findings on such a page is an error.`;
+
 const SYSTEM_PROMPT = `You are an E-E-A-T claim auditor for a digital marketing agency. You read the text of a single web page and flag statements that assert something factual without backing it up on the page, judged against Google's E-E-A-T guidelines (Experience, Expertise, Authoritativeness, Trustworthiness).
 
 Be thorough. Surface every material claim that is not backed on the page, not only the most obvious one. Typical targets:
@@ -69,7 +78,7 @@ Return ONLY a JSON array, no prose, no markdown fences. Each item must be exactl
   "suggested_source": { "title": "source title", "url": "https://..." } or null
 }
 
-Return up to 12 of the most important claims, ordered by severity. If the page truly makes no unsubstantiated factual claims, return [].`;
+Return up to 12 of the most important claims, ordered by severity. If the page truly makes no unsubstantiated factual claims, return [].${SEVERITY_RUBRIC}`;
 
 const FACTCHECK_PROMPT = `You are an E-E-A-T claim auditor AND fact-checker for a digital marketing agency. You read the text of a single web page and do TWO jobs.
 
@@ -110,7 +119,7 @@ Return ONLY a JSON array, no prose, no markdown fences. Each item must be exactl
 
 Process: first carry out job 1 (substantiation) on the page, which needs no searching. Then for job 2 run the web searches you need to verify the concrete facts. Your final output must be ONLY the JSON array described above, nothing else. A normal marketing or blog page almost always has at least a few unsupported or checkable claims, so returning an empty array should be rare; only do so if the page genuinely makes no factual claims at all.
 
-Return at most 12 of the most important findings. If the page genuinely has none, return [].`;
+Return at most 12 of the most important findings. If the page genuinely has none, return [].${SEVERITY_RUBRIC}`;
 
 function buildSystemPrompt(factCheck) { return factCheck ? FACTCHECK_PROMPT : SYSTEM_PROMPT; }
 
@@ -141,7 +150,7 @@ Run the web searches you need, then output ONLY a JSON array, no prose, no markd
   "suggested_source": { "title": "source title", "url": "https://..." } or null
 }
 
-Return up to 10 findings. If no concrete factual claim needs correcting, return [].`;
+Return up to 10 findings. If no concrete factual claim needs correcting, return [].${SEVERITY_RUBRIC}`;
 
 // Pull the main article text out of a page. Modern blogs and SPAs wrap the body
 // in many nested containers and surround it with "recent posts", "related", and
