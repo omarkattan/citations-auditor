@@ -35,13 +35,20 @@ async function createCheckout(packageId, origin) {
   if (!pkg) throw new Error('Unknown package.');
 
   const descriptor = (process.env.STRIPE_STATEMENT_DESCRIPTOR || 'SANDSTORM DIGITAL').slice(0, 22);
+  // Mirror the per-scan credit costs so the Stripe checkout line matches the
+  // homepage and FAQ. Defaults track server.js (standard 3, fact-check 6).
+  const stdCost = parseInt(process.env.STANDARD_CREDIT_COST || '3', 10);
+  const fcCost = parseInt(process.env.FACTCHECK_CREDIT_COST || '6', 10);
+  const stdN = Math.floor(pkg.credits / stdCost);
+  const fcN = Math.floor(pkg.credits / fcCost);
+  const productName = `Claims Auditor ${pkg.name} - ${pkg.credits} credits (${stdN} standard or ${fcN} fact-checked audits)`;
   const session = await client().checkout.sessions.create({
     mode: 'payment',
     line_items: [
       {
         price_data: {
           currency: 'usd',
-          product_data: { name: `Claims Auditor ${pkg.name} - ${pkg.credits} credits` },
+          product_data: { name: productName },
           unit_amount: pkg.amount
         },
         quantity: 1
