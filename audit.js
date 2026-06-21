@@ -6,7 +6,7 @@
 const cheerio = require('cheerio');
 const Anthropic = require('@anthropic-ai/sdk');
 const https = require('node:https');
-const { fetchHtml, fetchViaBrowserless, fetchViaBrowserlessBQL, browserlessConfigured } = require('./fetchpage');
+const { fetchHtml } = require('./fetchpage');
 
 const MODEL = process.env.CLAIMS_MODEL || 'claude-sonnet-4-6';
 const MAX_TEXT_CHARS = 8000;
@@ -143,20 +143,49 @@ Run the web searches you need, then output ONLY a JSON array, no prose, no markd
 
 Return up to 10 findings. If no concrete factual claim needs correcting, return [].`;
 
+// Pull the main article text out of a page. Modern blogs and SPAs wrap the body
+// in many nested containers and surround it with "recent posts", "related", and
+// other link-heavy widgets, so naively taking <main>/<article>/<body> often
+// grabs a sidebar instead of the article - this is exactly what produced the
+// 367-character "recent posts" reads on payit.ae. Instead we strip the obvious
+// chrome, then score every plausible container by its NON-LINK text length and
+// keep the densest one. Prose article bodies win; navigation and recent-post
+// lists, which are almost entirely link text, score near zero.
 function extractText(html) {
   const $ = cheerio.load(html);
-  $('script, style, noscript, nav, footer, header, aside, form, svg').remove();
+  $('script, style, noscript, nav, footer, header, aside, form, svg, iframe, button, label, select, template').remove();
+
+  // Drop common non-article blocks by class/id signature.
+  const JUNK = /(^|[\s_-])(nav|menu|sidebar|side-bar|widget|related|recent|latest|popular|trending|from-the-blog|more-from|up-next|share|sharing|social|comment|breadcrumb|pagination|paging|subscribe|newsletter|signup|promo|advert|\bads?\b|banner|cookie|consent|gdpr|modal|popup|overlay|toc|table-of-contents|tag-list|tags|categories|author-(?:box|bio)|read-more|more-posts|recommended|skip-link)([\s_-]|$)/i;
+  $('[class],[id]').each((_, el) => {
+    const sig = (($(el).attr('class') || '') + ' ' + ($(el).attr('id') || ''));
+    if (JUNK.test(sig)) $(el).remove();
+  });
 
   const title = $('title').first().text().trim();
-  const root = $('main').length ? $('main') : $('article').length ? $('article') : $('body');
 
-  const text = root
-    .text()
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_TEXT_CHARS);
+  // Score candidate containers by non-link text length and keep the best one.
+  let best = null;
+  let bestScore = 0;
+  $('article, main, [role="main"], section, div').each((_, el) => {
+    const node = $(el);
+    const total = node.text().replace(/\s+/g, ' ').trim().length;
+    if (total < 200) return; // too small to be the article body
+    let linkLen = 0;
+    node.find('a').each((_, a) => { linkLen += ($(a).text() || '').length; });
+    const score = total - linkLen; // reward prose, penalize link menus
+    if (score > bestScore) { bestScore = score; best = node; }
+  });
 
-  return { title, text };
+  let text = (best ? best.text() : $('body').text()).replace(/\s+/g, ' ').trim();
+
+  // If scoring found nothing solid (unusual markup, no real prose container),
+  // fall back to the full body text so we never silently return a sidebar.
+  if (text.length < 200) {
+    text = $('body').text().replace(/\s+/g, ' ').trim();
+  }
+
+  return { title, text: text.slice(0, MAX_TEXT_CHARS) };
 }
 
 function parseClaims(raw) {
@@ -268,39 +297,16 @@ async function auditPage(url, { apiKey, findSources = true, factCheck = false, d
   if (!fetched.ok) {
     if (fetched.notHtml) return { url, error: 'Not an HTML page, skipped.', claims: [] };
     if (fetched.blocked) {
-      const note = browserlessConfigured()
-        ? ', even through Browserless. Try Paste text.'
-        : '. Connect Browserless or use Paste text.';
-      return { url, error: `Blocked by the site (HTTP ${fetched.status})${note}`, claims: [] };
+      const code = (fetched.status && fetched.status >= 400) ? ` (HTTP ${fetched.status})` : '';
+      return { url, error: `Blocked by the site${code}. Use Paste text to audit this page.`, claims: [] };
     }
     return { url, error: fetched.error || 'Page could not be reached.', claims: [] };
   }
 
-  let { title, text } = extractText(fetched.html);
-  let browserless = fetched.via === 'browserless' ? 1 : 0;
-
-  // Re-render when the extracted article text is implausibly thin. On
-  // JavaScript-rendered pages (SPAs) the first render can return only the static
-  // shell or a sidebar before the article body hydrates, so extraction yields a
-  // few hundred characters of nav/recent-posts instead of the article. Renders
-  // vary run to run, so retrying usually lands the full content. This runs
-  // regardless of how the page was first fetched.
-  const MIN_ARTICLE = parseInt(process.env.MIN_ARTICLE_CHARS || '800', 10);
-  let renderTries = 0;
-  while ((!text || text.length < MIN_ARTICLE) && browserlessConfigured() && renderTries < 2) {
-    renderTries += 1;
-    // /unblock returns the static shell on SPA pages, so re-render with BQL,
-    // which waits for the network to go idle and the article body to load.
-    const rendered = await fetchViaBrowserlessBQL(url);
-    browserless += 1;
-    if (rendered.ok) {
-      const ex = extractText(rendered.html);
-      if (ex.text && ex.text.length > (text || '').length) {
-        title = ex.title || title;
-        text = ex.text;
-      }
-    }
-  }
+  const { title, text } = extractText(fetched.html);
+  // Browserless removed: pages are fetched once, directly. Kept at 0 so the
+  // cost-tracking plumbing (scan_costs.browserless_renders) stays valid.
+  const browserless = 0;
 
   if (!text || text.length < 120) {
     return { url, title, error: 'Too little readable text to audit.', claims: [], browserless };
@@ -311,10 +317,7 @@ async function auditPage(url, { apiKey, findSources = true, factCheck = false, d
   // challenge and falsely reporting "no issues". (Real article text never shows
   // these phrases as visible copy; challenge scripts are stripped on extraction.)
   if (/\b(verify(?:ing)? you are human|enable javascript and cookies|just a moment|checking your browser|needs to review the security of your connection|attention required|please verify you are (?:a )?human|complete the security check|press (?:and|&) hold)\b/i.test(text.slice(0, 1500))) {
-    const note = browserlessConfigured()
-      ? ', even through Browserless. Try Paste text.'
-      : '. Connect Browserless or use Paste text.';
-    return { url, title, error: `Blocked by the site (bot challenge)${note}`, claims: [], browserless };
+    return { url, title, error: 'Blocked by the site (bot challenge). Use Paste text to audit this page.', claims: [], browserless };
   }
 
   const result = await runClaims(url, title, text, findSources, key, factCheck, debug);
@@ -511,7 +514,7 @@ async function diagnose() {
   return {
     model: MODEL,
     usingCustomDispatcher: Boolean(customFetch),
-    browserless: browserlessConfigured(),
+    browserless: false,
     rawHttps: raw,
     sdk
   };
