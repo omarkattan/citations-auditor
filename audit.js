@@ -250,14 +250,22 @@ function isTransient(err) {
 }
 
 async function callClaude(client, userContent, useWebSearch, system, attempt = 0) {
+  let sys = system || SYSTEM_PROMPT;
+  // When web search is off, the model has no tool to find a real citation. Make
+  // it explicit that it must leave suggested_source null rather than guess, so a
+  // no-search pass can never fabricate a source. Detection is unaffected: the
+  // prompt judges substantiation from the page text, not from search.
+  if (!useWebSearch) {
+    sys += '\n\nIMPORTANT: Web search is unavailable for this audit. Set "suggested_source" to null for every item. Never invent, guess, or fabricate a source title or URL. Flag claims exactly as instructed above; only the suggested_source field is affected.';
+  }
   const request = {
     model: MODEL,
     max_tokens: parseInt(process.env.CLAIMS_MAX_TOKENS || '8000', 10),
-    system: system || SYSTEM_PROMPT,
+    system: sys,
     messages: [{ role: 'user', content: userContent }]
   };
   if (useWebSearch) {
-    request.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }];
+    request.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: parseInt(process.env.WEB_SEARCH_MAX_USES || '4', 10) }];
   }
   // Stream the response and assemble the final message. If the connection drops
   // (Render free tier occasionally severs keep-alive sockets), retry a couple
@@ -354,7 +362,7 @@ async function runPass(client, userContent, useSearch, system, usage, textLen) {
   addUsage(usage, r.usage);
   let claims = parseClaims(r.text);
   let raw = r.text;
-  const maxRetries = parseInt(process.env.AUDIT_RETRY_EMPTY || '2', 10);
+  const maxRetries = parseInt(process.env.AUDIT_RETRY_EMPTY || '1', 10);
   let attempts = 0;
   while (claims.length === 0 && textLen > 1200 && attempts < maxRetries) {
     attempts += 1;
