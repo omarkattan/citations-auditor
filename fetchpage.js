@@ -110,12 +110,14 @@ function browserlessConfig() {
 }
 
 // Raw Browserless call with no challenge filtering. Returns the actual response
-// so callers (and the diagnostic) can see exactly what came back.
-async function browserlessRaw(url, timeoutMs) {
+// so callers (and the diagnostic) can see exactly what came back. stickyOverride
+// lets the retry loop rotate to a fresh residential IP between attempts.
+async function browserlessRaw(url, timeoutMs, stickyOverride) {
   const token = process.env.BROWSERLESS_TOKEN;
   if (!token) return { status: null, html: null, error: 'BROWSERLESS_TOKEN not set' };
 
   const cfg = browserlessConfig();
+  const sticky = stickyOverride === undefined ? cfg.proxySticky : stickyOverride;
   // Client abort must outlast the server-side timeout, or we cut off a
   // challenge that was about to clear.
   const t = timeoutMs || parseInt(process.env.BROWSERLESS_TIMEOUT_MS || String(cfg.serverTimeoutMs + 15000), 10);
@@ -137,7 +139,7 @@ async function browserlessRaw(url, timeoutMs) {
     if (cfg.proxy) {
       qs.set('proxy', cfg.proxy);
       if (cfg.proxyCountry) qs.set('proxyCountry', cfg.proxyCountry);
-      if (cfg.proxySticky) qs.set('proxySticky', 'true');
+      if (sticky) qs.set('proxySticky', 'true');
     }
     qs.set('timeout', String(cfg.serverTimeoutMs));
 
@@ -160,11 +162,39 @@ async function browserlessRaw(url, timeoutMs) {
   }
 }
 
+// Browserless unblock with automatic retries. Cloudflare solving is
+// probabilistic per residential IP, so on a challenge or transient failure we
+// retry with a fresh IP (sticky off) before giving up. This is what turns
+// intermittent success into reliable success on hard sites.
 async function fetchViaBrowserless(url, timeoutMs) {
-  const r = await browserlessRaw(url, timeoutMs);
-  if (r.error) return { ok: false, status: r.status, html: null, via: 'browserless', error: r.error };
-  return finalizeBrowserless(r.html);
+  if (!browserlessConfigured()) return { ok: false, status: null, html: null, via: 'browserless', error: 'BROWSERLESS_TOKEN not set' };
+  const maxTries = 1 + Math.max(0, parseInt(process.env.BROWSERLESS_RETRIES || '2', 10));
+  let last = { ok: false, status: null, html: null, via: 'browserless', error: 'browserless not attempted' };
+
+  for (let i = 0; i < maxTries; i++) {
+    // First attempt uses the configured stickiness; retries rotate the IP.
+    const sticky = i === 0 ? undefined : false;
+    const r = await browserlessRaw(url, timeoutMs, sticky);
+
+    if (r.error) {
+      last = { ok: false, status: r.status, html: null, via: 'browserless', error: r.error };
+      // Plan/auth/units problems will not improve on retry.
+      if (r.status === 401 || r.status === 402 || r.status === 403) break;
+      await sleep(700);
+      continue;
+    }
+
+    const fin = finalizeBrowserless(r.html);
+    if (fin.ok) return fin;
+
+    // Got a challenge page; wait briefly and try a fresh residential IP.
+    last = fin;
+    await sleep(800);
+  }
+  return last;
 }
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // Detect an UNSOLVED bot interstitial. Two things make this tricky: Cloudflare
 // leaves a "challenge-platform" script (and some boilerplate text) in the HTML
