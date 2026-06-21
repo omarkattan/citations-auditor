@@ -228,12 +228,13 @@ app.get('/api/fetch-test', async (req, res) => {
   const diag = await fetchDiagnostic(url);
   const fetched = await fetchHtml(url);
   if (fetched.ok) {
-    const ex = extractText(fetched.html);
+    const ex = extractText(fetched.html, { debug: true });
     diag.pipeline = {
       via: fetched.via,
       htmlLen: fetched.html.length,
       title: ex.title,
       textLen: ex.text.length,
+      sources: ex.sources,
       sample: ex.text.slice(0, 300)
     };
   } else {
