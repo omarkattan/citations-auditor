@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { discover } = require('./discover');
 const { auditPage, auditText, diagnose, extractText } = require('./audit');
-const { fetchHtml, fetchDiagnostic } = require('./fetchpage');
+const { fetchHtml, fetchDiagnostic, fetchViaBrowserlessBQL } = require('./fetchpage');
 const { logScan, getScans, logPages, getPages, ensureTabs, storageMode } = require('./sheets');
 const db = require('./db');
 const payments = require('./payments');
@@ -18,10 +18,7 @@ const MAX_PAGES_CAP = 25;
 const FREE_PAGES = parseInt(process.env.FREE_PAGES || '3', 10);
 // A fact-checked page costs more to run (more web searches and tokens), so it
 // spends more credits. Keeps margin healthy on the premium operation.
-const FACTCHECK_COST = parseInt(process.env.FACTCHECK_CREDIT_COST || '6', 10);
-// Standard (non-fact-check) page cost. With web search on, a standard audit
-// is no longer a near-free call, so this is tunable without a redeploy.
-const STANDARD_COST = parseInt(process.env.STANDARD_CREDIT_COST || '3', 10);
+const FACTCHECK_COST = parseInt(process.env.FACTCHECK_CREDIT_COST || '3', 10);
 
 if (!ADMIN_KEY) {
   console.warn('[admin] ADMIN_KEY is not set - all admin endpoints are disabled until you set it.');
@@ -127,7 +124,7 @@ app.get('/api/credits', async (req, res) => {
 
 app.get('/api/packages', (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ paymentsEnabled: payments.enabled(), packages: Object.values(payments.PACKAGES), standardCost: STANDARD_COST, factCheckCost: FACTCHECK_COST, freePages: FREE_PAGES });
+  res.json({ paymentsEnabled: payments.enabled(), packages: Object.values(payments.PACKAGES), factCheckCost: FACTCHECK_COST, freePages: FREE_PAGES });
 });
 
 app.post('/api/checkout', async (req, res) => {
@@ -164,7 +161,7 @@ app.get('/api/admin/grant', async (req, res) => {
 app.post('/api/audit-text', async (req, res) => {
   const { text, url, findSources, factCheck } = req.body || {};
   if (!text || !text.trim()) return res.status(400).json({ error: 'No text provided.' });
-  const pageCost = factCheck === true ? FACTCHECK_COST : STANDARD_COST;
+  const pageCost = factCheck === true ? FACTCHECK_COST : 1;
 
   const account = await resolveAccount(req);
   if (account.paywall) {
@@ -228,17 +225,30 @@ app.get('/api/fetch-test', async (req, res) => {
   const diag = await fetchDiagnostic(url);
   const fetched = await fetchHtml(url);
   if (fetched.ok) {
-    const ex = extractText(fetched.html, { debug: true });
+    const ex = extractText(fetched.html);
     diag.pipeline = {
       via: fetched.via,
       htmlLen: fetched.html.length,
       title: ex.title,
       textLen: ex.text.length,
-      sources: ex.sources,
       sample: ex.text.slice(0, 300)
     };
   } else {
     diag.pipeline = { via: 'none', error: fetched.error || 'fetch failed', status: fetched.status };
+  }
+  // Optional: probe BrowserQL directly so we can see what it returns for SPA pages.
+  if (req.query.bql === 'true') {
+    const b = await fetchViaBrowserlessBQL(url);
+    const ex = b.ok ? extractText(b.html) : { title: '', text: '' };
+    diag.bql = {
+      ok: b.ok,
+      status: b.status,
+      error: b.error || null,
+      htmlLen: b.html ? b.html.length : 0,
+      textLen: ex.text ? ex.text.length : 0,
+      title: ex.title || '',
+      sample: (ex.text || '').replace(/\s+/g, ' ').slice(0, 300)
+    };
   }
   res.json(diag);
 });
@@ -272,6 +282,7 @@ app.get('/api/audit-test', async (req, res) => {
 app.get('/api/scan/stream', async (req, res) => {
   const url = (req.query.url || '').trim();
   const source = (req.query.source || 'crawl').trim();
+  const urlsParam = (req.query.urls || '').trim();
   const pathPrefix = (req.query.path || '').trim();
   const findSources = req.query.findSources !== 'false';
   const factCheck = req.query.factCheck === 'true';
@@ -294,13 +305,18 @@ app.get('/api/scan/stream', async (req, res) => {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
-  if (!/^https?:\/\//i.test(url)) {
+  if (source === 'list') {
+    if (!/https?:\/\//i.test(urlsParam)) {
+      send('error', { message: 'Paste at least one full URL (including https://), one per line.' });
+      return res.end();
+    }
+  } else if (!/^https?:\/\//i.test(url)) {
     send('error', { message: 'Enter a full URL, including https://' });
     return res.end();
   }
 
   const started = Date.now();
-  const pageCost = factCheck ? FACTCHECK_COST : STANDARD_COST;
+  const pageCost = factCheck ? FACTCHECK_COST : 1;
   try {
     // Resolve the paying account and gate on balance.
     const account = await resolveAccount(req);
@@ -319,8 +335,10 @@ app.get('/api/scan/stream', async (req, res) => {
       }
     }
 
-    send('status', { message: source === 'single' ? 'Loading the page...' : 'Discovering pages...' });
-    let pages = await discover(source, url, { maxPages, pathPrefix });
+    send('status', { message: source === 'single' ? 'Loading the page...' : source === 'list' ? 'Loading your URLs...' : 'Discovering pages...' });
+    let pages = source === 'list'
+      ? await discover('list', urlsParam, { maxPages: 20 })
+      : await discover(source, url, { maxPages, pathPrefix });
 
     if (!pages.length) {
       send('error', { message: 'No pages found for that source.' });
@@ -338,6 +356,7 @@ app.get('/api/scan/stream', async (req, res) => {
     }
 
     send('pages', { count: pages.length, urls: pages, capped });
+    const rootLabel = source === 'list' ? `Pasted URL list (${pages.length})` : url;
 
     let totalClaims = 0;
     let highSeverity = 0;
@@ -362,7 +381,7 @@ app.get('/api/scan/stream', async (req, res) => {
         usage.webSearches += result.usage.web_searches || 0;
       }
       usage.browserlessRenders += result.browserless || 0;
-      pageRows.push({ pageUrl: result.url, source, claims: claims.length, high, root: url });
+      pageRows.push({ pageUrl: result.url, source, claims: claims.length, high, root: rootLabel });
 
       send('page', result);
     }
@@ -371,7 +390,7 @@ app.get('/api/scan/stream', async (req, res) => {
 
     const durationSec = Math.round((Date.now() - started) / 1000);
     await logScan({
-      url,
+      url: rootLabel,
       source,
       pagesScanned: pages.length,
       claimsFound: totalClaims,
@@ -379,7 +398,7 @@ app.get('/api/scan/stream', async (req, res) => {
       durationSec
     });
     await logPages(pageRows);
-    await logCost(url, factCheck ? source + '-factcheck' : source, pages.length, usage);
+    await logCost(rootLabel, factCheck ? source + '-factcheck' : source, pages.length, usage);
 
     const done = { pagesScanned: pages.length, totalClaims, highSeverity, durationSec, capped };
     if (account.paywall) done.balance = Math.max(0, account.balance - charged);
