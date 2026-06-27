@@ -110,6 +110,25 @@ function singleUrl(startUrl) {
   return [url];
 }
 
+// ---- Source: pasted list of specific URLs -----------------------------------
+
+function urlList(rawList, maxPages) {
+  const parts = String(rawList || '')
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out = [];
+  const seen = new Set();
+  for (const p of parts) {
+    const u = normalizeUrl(p);
+    if (!u || !/^https?:\/\//i.test(u) || seen.has(u)) continue;
+    seen.add(u);
+    out.push(u);
+    if (out.length >= maxPages) break;
+  }
+  return out;
+}
+
 // ---- Router -----------------------------------------------------------------
 
 async function discover(source, startUrl, options = {}) {
@@ -119,6 +138,8 @@ async function discover(source, startUrl, options = {}) {
       return crawlSite(startUrl, options); // pathPrefix applied inside when set
     case 'single':
       return singleUrl(startUrl);
+    case 'list':
+      return urlList(startUrl, options.maxPages || 20);
     default:
       throw new Error(`Unknown source: ${source}`);
   }
