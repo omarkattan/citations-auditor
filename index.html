@@ -347,7 +347,7 @@
   <header>
     <div class="badge">Sandstorm Digital // E-E-A-T</div>
     <h1>Claims Auditor<span class="cursor">_</span></h1>
-    <p class="sub">Paste any page URL - a blog post, landing page, or homepage. Claims Auditor flags statements that assert something without backing it up, maps each to the E-E-A-T pillar it weakens, and hands you the fix plus a real citation to use.</p>
+    <p class="sub">Point it at a site. It crawls the pages, flags claims that assert something without backing it up, maps each to the E-E-A-T pillar it weakens, and hands you the fix plus a real citation to use.</p>
   </header>
 
   <div class="credits-bar" id="creditsBar">
@@ -364,17 +364,24 @@
   <div class="buy-panel" id="buyPanel"></div>
 
   <div class="panel">
-    <label class="field" for="url">Page URL</label>
-    <input type="text" id="url" placeholder="https://example.com/blog/your-post" autocomplete="off" spellcheck="false">
+    <label class="field" for="url">Site URL</label>
+    <input type="text" id="url" placeholder="https://example.com" autocomplete="off" spellcheck="false">
 
     <div style="margin-top:16px">
       <label class="field">Mode</label>
       <div class="sources" id="sources">
-        <button class="src-btn" data-src="single" aria-pressed="true">Single URL</button>
-        <button class="src-btn" data-src="crawl" aria-pressed="false">Crawl site</button>
+        <button class="src-btn" data-src="crawl" aria-pressed="true">Crawl site</button>
+        <button class="src-btn" data-src="single" aria-pressed="false">Single URL</button>
+        <button class="src-btn" data-src="list" aria-pressed="false">URL list</button>
         <button class="src-btn" data-src="paste" aria-pressed="false">Paste text</button>
       </div>
-      <div class="src-note" id="srcNote">Audits just this one page. Paste the full URL of the blog post or page you want to check.</div>
+      <div class="src-note" id="srcNote">Follows internal links from the URL you enter. Add a folder to limit the scope.</div>
+    </div>
+
+    <div id="listWrap" style="margin-top:16px; display:none">
+      <label class="field" for="urlList">URLs to audit (one per line, up to 20)</label>
+      <textarea id="urlList" placeholder="https://example.com/page-one&#10;https://example.com/page-two&#10;https://example.com/page-three" spellcheck="false"></textarea>
+      <div class="src-note" id="listCount">0 of 20 URLs</div>
     </div>
 
     <div id="pasteWrap" style="margin-top:16px; display:none">
@@ -383,15 +390,15 @@
     </div>
 
     <div class="row">
-      <div id="pathWrap" style="display:none">
+      <div id="pathWrap">
         <label class="field" for="path">Folder (optional)</label>
         <input type="text" id="path" placeholder="/blog" autocomplete="off" spellcheck="false">
       </div>
-      <div id="maxWrap" style="display:none">
+      <div id="maxWrap">
         <label class="field" for="maxPages">Max pages</label>
         <select id="maxPages">
-          <option selected>5</option>
-          <option>10</option>
+          <option>5</option>
+          <option selected>10</option>
           <option>15</option>
           <option>25</option>
         </select>
@@ -400,7 +407,6 @@
         <button class="run" id="run">Run audit</button>
       </div>
     </div>
-    <div class="cost-est" id="costEst" style="font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:10px"></div>
 
     <div class="fc-row">
       <label class="fc-toggle">
@@ -458,7 +464,7 @@
     <div class="eyebrow">// pricing</div>
     <h2 class="sec-title">Simple credits. Pay as you audit.</h2>
     <div class="pricing" id="pricingGrid"></div>
-    <div class="pricing-note" id="pricingNote">Your first 3 pages are free. A standard audit costs 3 credits; a fact-checked audit costs 6. Credits never expire, and you only pay for pages that actually run.</div>
+    <div class="pricing-note">Your first 3 pages are free. A standard audit costs 1 credit; a fact-checked audit costs 3. Credits never expire, and you only pay for pages that actually run.</div>
   </section>
 
   <section class="mkt">
@@ -479,7 +485,7 @@
       </details>
       <details class="faq-item">
         <summary>How do credits work?</summary>
-        <div class="fa" id="faqCredits">A standard audit uses 3 credits per page. A fact-checked audit uses 6 credits per page, because verifying facts against live sources does more work. Crawl mode audits several pages at once and charges per page. You only pay for pages that actually run, never for ones that error or get blocked.</div>
+        <div class="fa">A standard audit uses 1 credit per page. A fact-checked audit uses 3 credits per page, because verifying facts against live sources does more work. Crawl mode audits several pages at once and charges per page. You only pay for pages that actually run, never for ones that error or get blocked.</div>
       </details>
       <details class="faq-item">
         <summary>Do credits expire?</summary>
@@ -507,53 +513,53 @@
 
 <script>
   const SOURCE_NOTES = {
-    crawl: 'Follows internal links and audits multiple pages. Each page costs credits, so use the folder field (e.g. /blog) to limit scope and keep Max pages low.',
-    single: 'Audits just this one page. Paste the full URL of the blog post or page you want to check, for example https://yoursite.com/blog/my-post.',
+    crawl: 'Follows internal links from the URL you enter. Add a folder to limit the scope.',
+    single: 'Audits only the single URL you enter.',
+    list: 'Audits a specific list of URLs you paste in, one per line, up to 20.',
     paste: 'Audits text you paste in. Use this when a site blocks the fetch. The URL field is optional, just a label.'
   };
 
-  let source = 'single';
-  let costStd = 3, costFc = 6, creditBalance = null;
+  let source = 'crawl';
   const sourcesEl = document.getElementById('sources');
   const srcNote = document.getElementById('srcNote');
   const pathWrap = document.getElementById('pathWrap');
   const maxWrap = document.getElementById('maxWrap');
   const pasteWrap = document.getElementById('pasteWrap');
   const pasteText = document.getElementById('pasteText');
-  const maxPagesEl = document.getElementById('maxPages');
-  const factCheckEl = document.getElementById('factCheck');
-  const costEst = document.getElementById('costEst');
+  const listWrap = document.getElementById('listWrap');
+  const urlListEl = document.getElementById('urlList');
+  const listCount = document.getElementById('listCount');
+  const urlField = document.getElementById('url');
 
-  function perPageCost() { return (factCheckEl && factCheckEl.checked) ? costFc : costStd; }
-  function updateCostEst() {
-    if (!costEst) return;
-    const per = perPageCost();
-    if (source === 'crawl') {
-      const mp = parseInt(maxPagesEl.value, 10) || 0;
-      costEst.textContent = 'Audits up to ' + mp + ' pages, using up to ' + (mp * per) + ' credits (you are only charged for pages that run).';
-    } else {
-      costEst.textContent = 'Audits 1 page, using ' + per + ' credit' + (per === 1 ? '' : 's') + '.';
-    }
+  function parseUrlList() {
+    return (urlListEl.value || '')
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter((s) => /^https?:\/\//i.test(s))
+      .slice(0, 20);
   }
-  function setMode(newSource) {
-    source = newSource;
-    [...sourcesEl.children].forEach((b) => b.setAttribute('aria-pressed', b.dataset.src === newSource));
-    srcNote.textContent = SOURCE_NOTES[source];
-    const crawl = source === 'crawl';
-    pathWrap.style.display = crawl ? 'block' : 'none';
-    maxWrap.style.display = crawl ? 'block' : 'none';
-    pasteWrap.style.display = source === 'paste' ? 'block' : 'none';
-    updateCostEst();
+  if (urlListEl) {
+    urlListEl.addEventListener('input', () => {
+      const n = parseUrlList().length;
+      listCount.textContent = n + ' of 20 URLs' + (n >= 20 ? ' (max reached)' : '');
+    });
   }
 
   sourcesEl.addEventListener('click', (e) => {
     const btn = e.target.closest('.src-btn');
     if (!btn) return;
-    setMode(btn.dataset.src);
+    source = btn.dataset.src;
+    [...sourcesEl.children].forEach((b) => b.setAttribute('aria-pressed', b === btn));
+    srcNote.textContent = SOURCE_NOTES[source];
+    const crawl = source === 'crawl';
+    pathWrap.style.display = crawl ? 'block' : 'none';
+    maxWrap.style.display = crawl ? 'block' : 'none';
+    pasteWrap.style.display = source === 'paste' ? 'block' : 'none';
+    listWrap.style.display = source === 'list' ? 'block' : 'none';
+    // The single Site URL field is not used in list or paste mode.
+    urlField.style.display = (source === 'list') ? 'none' : 'block';
+    urlField.previousElementSibling.style.display = (source === 'list') ? 'none' : 'block';
   });
-  maxPagesEl.addEventListener('change', updateCostEst);
-  if (factCheckEl) factCheckEl.addEventListener('change', updateCostEst);
-  setMode('single');
 
   const term = document.getElementById('term');
   const summary = document.getElementById('summary');
@@ -567,6 +573,7 @@
     downloadsBottom.style.display = d;
   }
   const runBtn = document.getElementById('run');
+  const factCheckEl = document.getElementById('factCheck');
   let factCheckActive = false;
   let pageIndex = {};
   let scanData = [];
@@ -814,9 +821,15 @@
 
   function run() {
     const url = document.getElementById('url').value.trim();
-    if (!url) { document.getElementById('url').focus(); return; }
+    let listUrls = [];
+    if (source === 'list') {
+      listUrls = parseUrlList();
+      if (!listUrls.length) { urlListEl.focus(); log('> paste at least one full URL (https://), one per line', 'err'); return; }
+    } else if (!url) {
+      document.getElementById('url').focus(); return;
+    }
     const pathPrefix = document.getElementById('path').value.trim();
-    const maxPages = source === 'single' ? '1' : document.getElementById('maxPages').value;
+    const maxPages = source === 'single' ? '1' : source === 'list' ? String(listUrls.length) : document.getElementById('maxPages').value;
 
     term.style.display = 'block';
     term.innerHTML = '';
@@ -827,14 +840,16 @@
     results.innerHTML = '';
     pageIndex = {};
     scanData = [];
-    scanMeta = { url, source };
+    scanMeta = { url: source === 'list' ? 'Pasted URL list' : url, source };
     showDownloads(false);
     runBtn.disabled = true;
     runBtn.textContent = 'Auditing...';
     overlayShow();
-    ovPhase('Discovering pages'); ovStep('Discover'); ovActCycle(DISCOVERY_ACTS);
+    ovPhase(source === 'list' ? 'Loading your URLs' : 'Discovering pages'); ovStep('Discover'); ovActCycle(DISCOVERY_ACTS);
 
-    const params = new URLSearchParams({ url, source, maxPages, findSources: 'true' });
+    const params = new URLSearchParams({ source, maxPages, findSources: 'true' });
+    if (source === 'list') params.set('urls', listUrls.join('\n'));
+    else params.set('url', url);
     factCheckActive = !!(factCheckEl && factCheckEl.checked);
     if (factCheckActive) params.set('factCheck', 'true');
     if (source === 'crawl' && pathPrefix) params.set('path', pathPrefix);
@@ -1076,14 +1091,6 @@
   document.getElementById('dlPdf2').addEventListener('click', exportPdf);
 
   function start() {
-    if (source === 'crawl') {
-      const mp = parseInt(maxPagesEl.value, 10) || 0;
-      const maxCost = mp * perPageCost();
-      let m = 'Crawl mode can audit up to ' + mp + ' pages and use up to ' + maxCost + ' credits';
-      m += (creditBalance != null ? ' (you have ' + creditBalance + ').' : '.');
-      m += '\n\nYou are only charged for pages that actually run. To audit just one page instead, use Single URL mode. Continue with the crawl?';
-      if (!confirm(m)) return;
-    }
     if (source === 'paste') runPasteAudit();
     else run();
   }
@@ -1110,8 +1117,7 @@
       const d = await (await fetch('/api/credits' + q)).json();
       paywall = !!d.paywall;
       if (!paywall) return;
-      creditBalance = d.balance != null ? d.balance : 0;
-      setBalance(creditBalance);
+      setBalance(d.balance != null ? d.balance : 0);
       cbNote.textContent = accessCode ? (d.valid ? '(code applied)' : '(invalid code)') : '(free trial)';
     } catch {}
   }
@@ -1142,15 +1148,13 @@
       b.addEventListener('click', () => buyPackage(b.dataset.pkg, enabled)));
   }
 
-  function renderPricingGrid(packages, enabled, factCheckCost, standardCost) {
+  function renderPricingGrid(packages, enabled, factCheckCost) {
     const grid = document.getElementById('pricingGrid');
     if (!grid || !packages.length) return;
-    const fcc = factCheckCost || 6;
-    const sc = standardCost || 3;
+    const fcc = factCheckCost || 3;
     const mid = Math.floor(packages.length / 2);
     grid.innerHTML = packages.map((p, i) => {
       const per = (p.amount / 100) / p.credits;
-      const stdPages = Math.floor(p.credits / sc);
       const fcPages = Math.floor(p.credits / fcc);
       const popular = i === mid;
       return '<div class="price-card' + (popular ? ' popular' : '') + '">' +
@@ -1158,7 +1162,7 @@
         '<div class="pname">' + esc(p.name) + '</div>' +
         '<div class="pprice">$' + (p.amount / 100).toFixed(2) + '</div>' +
         '<div class="pcred">' + p.credits + ' credits</div>' +
-        '<div class="puse">' + stdPages + ' standard audits<br>or ' + fcPages + ' fact-checked audits</div>' +
+        '<div class="puse">' + p.credits + ' standard audits<br>or ' + fcPages + ' fact-checked audits</div>' +
         '<div class="pper">$' + per.toFixed(2) + ' per credit</div>' +
         '<div class="pbtn"><button data-pkg="' + esc(p.id) + '">Buy ' + esc(p.name) + '</button></div>' +
       '</div>';
@@ -1167,22 +1171,10 @@
       b.addEventListener('click', () => buyPackage(b.dataset.pkg, enabled)));
   }
 
-  function syncPricingCopy(pkg) {
-    var sc = pkg.standardCost || 3, fcc = pkg.factCheckCost || 6, fp = (pkg.freePages == null ? 3 : pkg.freePages);
-    costStd = sc; costFc = fcc; updateCostEst();
-    var sCr = sc + ' credit' + (sc === 1 ? '' : 's');
-    var fCr = fcc + ' credit' + (fcc === 1 ? '' : 's');
-    var note = document.getElementById('pricingNote');
-    if (note) note.textContent = 'Your first ' + fp + ' pages are free. A standard audit costs ' + sCr + '; a fact-checked audit costs ' + fcc + '. Credits never expire, and you only pay for pages that actually run.';
-    var fc = document.getElementById('faqCredits');
-    if (fc) fc.textContent = 'A standard audit uses ' + sCr + ' per page. A fact-checked audit uses ' + fCr + ' per page, because verifying facts against live sources does more work. Crawl mode audits several pages at once and charges per page. You only pay for pages that actually run, never for ones that error or get blocked.';
-  }
-
   async function initCredits() {
     try {
       const pkg = await (await fetch('/api/packages')).json();
-      renderPricingGrid(pkg.packages || [], pkg.paymentsEnabled, pkg.factCheckCost, pkg.standardCost);
-      syncPricingCopy(pkg);
+      renderPricingGrid(pkg.packages || [], pkg.paymentsEnabled, pkg.factCheckCost);
       await refreshCredits();
       if (!paywall) return;
       creditsBar.style.display = 'flex';
